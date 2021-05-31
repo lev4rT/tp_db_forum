@@ -9,12 +9,10 @@ CREATE TABLE users (
 DROP TABLE IF EXISTS forums CASCADE;
 CREATE TABLE forums (
                         title TEXT NOT NULL UNIQUE,  -- Название форума.
-                        "user" TEXT NOT NULL,  -- Nickname пользователя, который отвечает за форум.
+                        "user" TEXT NOT NULL REFERENCES users(nickname) ,  -- Nickname пользователя, который отвечает за форум.
                         slug TEXT NOT NULL UNIQUE PRIMARY KEY,  -- Человекопонятный URL. Уникальное поле.
-                        posts BIGINT,  -- Общее кол-во сообщений в данном форуме.
-                        threads BIGINT,  -- Общее кол-во ветвей обсуждения в данном форуме.
-
-                        FOREIGN KEY("user") REFERENCES users (nickname)
+                        posts BIGINT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
+                        threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
 
 DROP TABLE IF EXISTS threads CASCADE;
@@ -25,8 +23,10 @@ CREATE TABLE threads (
                          forum TEXT NOT NULL REFERENCES forums(slug),  -- Форум, в котором расположена данная ветка обсуждения.
                          message TEXT NOT NULL,  -- Описание ветки обсуждения.
                          votes INTEGER DEFAULT 0,  -- Кол-во голосов непосредственно за данное сообщение форума.
-                         slug TEXT,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
-                         created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
+                         slug TEXT DEFAULT NULL,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
+                         created TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- Дата создания ветки на форуме.
+
+                         CONSTRAINT unique_thread UNIQUE (forum, author, title)
 );
 
 DROP TABLE IF EXISTS posts CASCADE;
@@ -43,7 +43,37 @@ CREATE TABLE posts (
 
 DROP TABLE IF EXISTS votes CASCADE;
 CREATE TABLE votes(
-                      nickname TEXT UNIQUE NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
-                      voice SMALLINT UNIQUE,  -- Отданный голос.
-                      threadID INT UNIQUE REFERENCES threads(id)  -- ID  треда
+                      nickname TEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
+                      voice SMALLINT,  -- Отданный голос.
+                      threadID INT REFERENCES threads(id),  -- ID  треда
+
+                      CONSTRAINT unique_vote UNIQUE (nickname, threadID)
 );
+
+CREATE OR REPLACE FUNCTION addVoteForThread() RETURNS TRIGGER AS
+$$
+BEGIN
+    UPDATE threads SET votes = votes + NEW."voice" WHERE id = NEW."threadid";
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER addVoteForThreadTrigger AFTER INSERT ON "votes"
+    FOR EACH ROW
+    EXECUTE PROCEDURE addVoteForThread();
+
+------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION changeVoteForThread() RETURNS TRIGGER AS
+$$
+BEGIN
+    UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER changeVoteForThreadTrigger AFTER UPDATE ON "votes"
+    FOR EACH ROW
+    EXECUTE PROCEDURE changeVoteForThread();
