@@ -32,11 +32,11 @@ CREATE TABLE threads (
 DROP TABLE IF EXISTS posts CASCADE;
 CREATE TABLE posts (
                        id BIGSERIAL NOT NULL PRIMARY KEY,  -- Идентификатор данного сообщения.
-                       parent BIGINT REFERENCES posts(id) DEFAULT 0,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
+                       parent BIGINT DEFAULT 0,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
                        author TEXT NOT NULL REFERENCES users(nickname),  -- Автор, написавший данное сообщение.
                        message TEXT NOT NULL,  -- Собственно сообщение форума.
                        isEdited BOOLEAN DEFAULT false,  -- Истина, если данное сообщение было изменено.
-                       forum TEXT NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
+                       forum TEXT, -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
                        thread INTEGER REFERENCES threads(id),  -- Идентификатор ветви (id) обсуждения данного сообещния.
                        created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания сообщения на форуме.
 );

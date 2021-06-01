@@ -1,4 +1,13 @@
 curl -X POST localhost:5000/api/service/clear &&
 curl -X POST -d '{"fullname":"Denis_Kolosov", "about":"DA_YA_DEN9", "email":"qweasd@mail.ru"}' localhost:5000/api/user/denis_kolosov/create &&
 curl -X POST -d '{"title":"Nice_Title", "user":"denis_kolosov", "slug":"wiki.com"}' localhost:5000/api/forum/create &&
-curl -X POST -d '{"title":"Nice_Thread", "author":"denis_kolosov", "message":"nice nice nice", "created":{}}' localhost:5000/api/forum/wiki.com/create
+curl -X POST -d '{"title":"Nice_Thread", "author":"denis_kolosov", "message":"nice nice nice", "created":{}}' localhost:5000/api/forum/wiki.com/create &&
+curl -X POST -d '[{"author":"denis_kolosov", "message":"ya-ya-ya", "parent":0}]' localhost:5000/api/thread/1/create
+
+Parent int64 `json:"parent"`
+	Author string `json:"author"`
+	Message string `json:"message"`
+	IsEdited bool `json:"is_edited"`
+	Forum string `json:"forum"`
+	Thread int `json:"thread"`
+	Created time.Time `json:"created"`

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,7 +22,16 @@ var DB *sql.DB
 func simpleGet(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "You came and you get it!")
 }
+
+//var threadIDForum map[int]string
+//var threadIDMaxPostID map[int]int64
+var threadIDForum sync.Map
+//var threadIDMaxPostID map[int]int64
+
 func main() {
+	//threadIDForum = make(map[int]string)
+	//threadIDMaxPostID = make(map[int]int64)
+
 	// Connect to postgreSql db
 	DB, _ = sql.Open(
 		"postgres",
@@ -35,10 +46,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	path := filepath.Join("script.sql")
-	c, _ := ioutil.ReadFile(path)
-	scriptString := string(c)
-	DB.Exec(scriptString)
+	//path := filepath.Join("script.sql")
+	//c, _ := ioutil.ReadFile(path)
+	//scriptString := string(c)
+	//DB.Exec(scriptString)
 
 	r := mux.NewRouter()
 
@@ -49,6 +60,7 @@ func main() {
 	r.HandleFunc("/api/forum/create", createForum)
 	r.HandleFunc("/api/forum/{slug}/create", createThread)
 	r.HandleFunc("/api/thread/{slug_or_id}/vote", voteThread)
+	r.HandleFunc("/api/thread/{slug_or_id}/create", createPost)
 	err := http.ListenAndServe(":5000", r)
 	if err != nil {
 		panic(err)
@@ -81,10 +93,13 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 	if err, ok := err.(*pq.Error); ok {
 		switch err.Constraint {
 		case "users_email_key":
+			fmt.Println(user)
 			DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE email=$1`, user.Email).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(user); err != nil {
+			var response[] User
+			fmt.Println(user)
+			if err := json.NewEncoder(w).Encode(append(response, user)); err != nil {
 				panic(err)
 			}
 			return
@@ -92,7 +107,8 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 			DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE nickname=$1`, user.Nickname).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(user); err != nil {
+			var response[] User
+			if err := json.NewEncoder(w).Encode(append(response, user)); err != nil {
 				panic(err)
 			}
 			return
@@ -127,22 +143,6 @@ func createForum(w http.ResponseWriter, r *http.Request) {
 
 	_, err := DB.Exec(`INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3)`, forum.Title, forum.User,  forum.Slug)
 	if err, ok := err.(*pq.Error); ok {
-		//fmt.Println("Severity:", err.Severity)
-		//fmt.Println("Code:", err.Code)
-		//fmt.Println("Message:", err.Message)
-		//fmt.Println("Detail:", err.Detail)
-		//fmt.Println("Hint:", err.Hint)
-		//fmt.Println("Position:", err.Position)
-		//fmt.Println("InternalPosition:", err.InternalPosition)
-		//fmt.Println("Where:", err.Where)
-		//fmt.Println("Schema:", err.Schema)
-		//fmt.Println("Table:", err.Table)
-		//fmt.Println("Column:", err.Column)
-		//fmt.Println("DataTypeName:", err.DataTypeName)
-		//fmt.Println("Constraint:", err.Constraint)
-		//fmt.Println("File:", err.File)
-		//fmt.Println("Line:", err.Line)
-		//fmt.Println("Routine:", err.Routine)
 		switch err.Constraint {
 		case "forums_user_fkey":
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -193,22 +193,6 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 
 	_, err := DB.Exec(`INSERT INTO threads(title, author, forum, message, votes, slug, created) VALUES ($1, $2, $3, $4, $5, $6, $7)`, thread.Title, thread.Author, thread.Forum, thread.Message, thread.Votes, thread.Slug, thread.Created)
 	if err, ok := err.(*pq.Error); ok {
-		//fmt.Println("Severity:", err.Severity)
-		//fmt.Println("Code:", err.Code)
-		//fmt.Println("Message:", err.Message)
-		//fmt.Println("Detail:", err.Detail)
-		//fmt.Println("Hint:", err.Hint)
-		//fmt.Println("Position:", err.Position)
-		//fmt.Println("InternalPosition:", err.InternalPosition)
-		//fmt.Println("Where:", err.Where)
-		//fmt.Println("Schema:", err.Schema)
-		//fmt.Println("Table:", err.Table)
-		//fmt.Println("Column:", err.Column)
-		//fmt.Println("DataTypeName:", err.DataTypeName)
-		//fmt.Println("Constraint:", err.Constraint)
-		//fmt.Println("File:", err.File)
-		//fmt.Println("Line:", err.Line)
-		//fmt.Println("Routine:", err.Routine)
 		switch err.Constraint {
 		case "unique_thread":
 			DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
@@ -237,6 +221,8 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusCreated)
 	DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+	threadIDForum.Store(thread.ID, thread.Forum)
+	//threadIDForum[thread.ID] = thread.Forum
 	if err := json.NewEncoder(w).Encode(thread); err != nil {
 		panic(err)
 	}
@@ -256,22 +242,6 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 
 	_, err := DB.Exec(`INSERT INTO votes(nickname, voice, threadID) VALUES ($1, $2, $3)`, vote.Nickname, vote.Voice, vote.ThreadID)
 	if err, ok := err.(*pq.Error); ok {
-		fmt.Println("Severity:", err.Severity)
-		fmt.Println("Code:", err.Code)
-		fmt.Println("Message:", err.Message)
-		fmt.Println("Detail:", err.Detail)
-		fmt.Println("Hint:", err.Hint)
-		fmt.Println("Position:", err.Position)
-		fmt.Println("InternalPosition:", err.InternalPosition)
-		fmt.Println("Where:", err.Where)
-		fmt.Println("Schema:", err.Schema)
-		fmt.Println("Table:", err.Table)
-		fmt.Println("Column:", err.Column)
-		fmt.Println("DataTypeName:", err.DataTypeName)
-		fmt.Println("Constraint:", err.Constraint)
-		fmt.Println("File:", err.File)
-		fmt.Println("Line:", err.Line)
-		fmt.Println("Routine:", err.Routine)
 		switch err.Constraint {
 		case "unique_vote":
 			DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
@@ -296,6 +266,88 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 	var thread Thread
 	DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=$1`, vote.ThreadID).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 	if err := json.NewEncoder(w).Encode(thread); err != nil {
+		panic(err)
+	}
+}
+
+type Post struct {
+	ID int64 `json:"id"`
+	Parent int64 `json:"parent"`
+	Author string `json:"author"`
+	Message string `json:"message"`
+	IsEdited bool `json:"is_edited"`
+	Forum string `json:"forum"`
+	Thread int `json:"thread"`
+	Created time.Time `json:"created"`
+}
+
+func createPost (w http.ResponseWriter, r *http.Request) {
+	var posts[] Post
+	vars := mux.Vars(r)
+	threadID, _ := strconv.Atoi(vars["slug_or_id"])
+	json.NewDecoder(r.Body).Decode(&posts)
+	//threadIDMaxPostID
+	resultQueryValueString := ""
+	// TODO: Validate PARENTS POST SOMEHOW!
+	for index, _ := range posts {
+		//if el.Parent > threadIDMaxPostID[threadID] {
+		//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		//	w.WriteHeader(http.StatusConflict)
+		//	if err := json.NewEncoder(w).Encode(ErrorMsg{
+		//		"Parents post doesn't exists!",
+		//	}); err != nil {
+		//		panic(err)
+		//	}
+		//	return
+		//}
+		//threadIDMaxPostID[threadID]++
+		posts[index].Thread = threadID
+		val, _ := threadIDForum.Load(posts[index].Thread)
+		posts[index].Forum = val.(string)
+		resultQueryValueString += fmt.Sprintf("(%d, '%s', '%s', %d, '%s'),", posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum)
+	}
+	resultQueryValueString = strings.TrimRight(resultQueryValueString, ",")
+
+	res, err := DB.Query(fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
+	fmt.Println(res, err)
+	if err, ok := err.(*pq.Error); ok {
+		fmt.Println("Severity:", err.Severity)
+		fmt.Println("Code:", err.Code)
+		fmt.Println("Message:", err.Message)
+		fmt.Println("Detail:", err.Detail)
+		fmt.Println("Hint:", err.Hint)
+		fmt.Println("Position:", err.Position)
+		fmt.Println("InternalPosition:", err.InternalPosition)
+		fmt.Println("Where:", err.Where)
+		fmt.Println("Schema:", err.Schema)
+		fmt.Println("Table:", err.Table)
+		fmt.Println("Column:", err.Column)
+		fmt.Println("DataTypeName:", err.DataTypeName)
+		fmt.Println("Constraint:", err.Constraint)
+		fmt.Println("File:", err.File)
+		fmt.Println("Line:", err.Line)
+		fmt.Println("Routine:", err.Routine)
+		switch err.Constraint {
+		case "posts_thread_fkey":
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusNotFound)
+			if err := json.NewEncoder(w).Encode(ErrorMsg{
+				"cant find thread!",
+			}); err != nil {
+				panic(err)
+			}
+			return
+		}
+	}
+
+	defer res.Close()
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(http.StatusCreated)
+	for index, _ := range posts {
+		res.Next()
+		res.Scan(&posts[index].ID, &posts[index].Created)
+	}
+	if err := json.NewEncoder(w).Encode(posts); err != nil {
 		panic(err)
 	}
 }
