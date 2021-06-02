@@ -1,16 +1,18 @@
+CREATE EXTENSION IF NOT EXISTS citext;
+
 DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
-                       nickname TEXT NOT NULL UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
+                       nickname CITEXT NOT NULL UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
                        fullname TEXT NOT NULL,  -- Полное имя пользователя.
                        about TEXT,  -- Описание пользователя.
-                       email TEXT NOT NULL UNIQUE  -- Почтовый адрес пользователя (уникальное поле).
+                       email CITEXT NOT NULL UNIQUE  -- Почтовый адрес пользователя (уникальное поле).
 );
 
 DROP TABLE IF EXISTS forums CASCADE;
 CREATE TABLE forums (
-                        title TEXT NOT NULL UNIQUE,  -- Название форума.
-                        "user" TEXT NOT NULL REFERENCES users(nickname) ,  -- Nickname пользователя, который отвечает за форум.
-                        slug TEXT NOT NULL UNIQUE PRIMARY KEY,  -- Человекопонятный URL. Уникальное поле.
+                        title TEXT NOT NULL,  -- Название форума.
+                        "user" CITEXT NOT NULL REFERENCES users(nickname) ,  -- Nickname пользователя, который отвечает за форум.
+                        slug CITEXT NOT NULL UNIQUE PRIMARY KEY,  -- Человекопонятный URL. Уникальное поле.
                         posts BIGINT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
                         threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
@@ -19,31 +21,101 @@ DROP TABLE IF EXISTS threads CASCADE;
 CREATE TABLE threads (
                          id SERIAL NOT NULL PRIMARY KEY,  -- Идентификатор ветки обсуждения.
                          title TEXT NOT NULL,  -- Заголовок ветки обсуждения.
-                         author TEXT NOT NULL REFERENCES users(nickname),  -- Пользователь, создавший данную тему.
-                         forum TEXT NOT NULL REFERENCES forums(slug),  -- Форум, в котором расположена данная ветка обсуждения.
+                         author CITEXT NOT NULL REFERENCES users(nickname),  -- Пользователь, создавший данную тему.
+                         forum CITEXT NOT NULL REFERENCES forums(slug),  -- Форум, в котором расположена данная ветка обсуждения.
                          message TEXT NOT NULL,  -- Описание ветки обсуждения.
                          votes INTEGER DEFAULT 0,  -- Кол-во голосов непосредственно за данное сообщение форума.
-                         slug TEXT DEFAULT NULL,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
-                         created TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- Дата создания ветки на форуме.
-
-                         CONSTRAINT unique_thread UNIQUE (forum, author, title)
+                         slug CITEXT,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
+                         created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
 );
+CREATE INDEX threadsForumAuthorSlugIndex ON threads(forum, author, slug);
+
+------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION appendThreadsCounterForum() RETURNS TRIGGER AS
+$$
+DECLARE
+    nicknameUser CITEXT;
+    fullnameUser TEXT;
+    aboutUser TEXT;
+    emailUser CITEXT;
+BEGIN
+    UPDATE forums SET threads = threads + 1 WHERE slug = NEW.forum;
+    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER appendThreadsCounterForumTrigger AFTER INSERT ON "threads"
+    FOR EACH ROW
+    EXECUTE PROCEDURE appendThreadsCounterForum();
+
+------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS posts CASCADE;
 CREATE TABLE posts (
                        id BIGSERIAL NOT NULL PRIMARY KEY,  -- Идентификатор данного сообщения.
                        parent BIGINT DEFAULT 0,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
-                       author TEXT NOT NULL REFERENCES users(nickname),  -- Автор, написавший данное сообщение.
+                       author CITEXT NOT NULL REFERENCES users(nickname),  -- Автор, написавший данное сообщение.
                        message TEXT NOT NULL,  -- Собственно сообщение форума.
                        isEdited BOOLEAN DEFAULT false,  -- Истина, если данное сообщение было изменено.
-                       forum TEXT, -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
+                       forum CITEXT, -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
                        thread INTEGER REFERENCES threads(id),  -- Идентификатор ветви (id) обсуждения данного сообещния.
-                       created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания сообщения на форуме.
+                       created TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- Дата создания сообщения на форуме.
+                       path BIGINT[] DEFAULT '{}', -- Materialized Path. Используется для вложенных постов
+
+                       CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
+
+------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
+$$
+DECLARE
+    nicknameUser CITEXT;
+    fullnameUser TEXT;
+    aboutUser TEXT;
+    emailUser CITEXT;
+BEGIN
+    UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
+    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
+    FOR EACH ROW
+    EXECUTE PROCEDURE appendPostsCounterForum();
+
+------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION setPathForPost() RETURNS TRIGGER AS
+$$
+BEGIN
+    IF NEW.parent = 0 THEN
+        NEW.path = ARRAY [NEW.id];
+    ELSE
+        SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
+        NEW.path = array_append(NEW.path, NEW.id);
+    END IF;
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER setPathForPostTrigger BEFORE INSERT ON "posts"
+    FOR EACH ROW
+    EXECUTE PROCEDURE setPathForPost();
+
+------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS votes CASCADE;
 CREATE TABLE votes(
-                      nickname TEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
+                      nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
                       voice SMALLINT,  -- Отданный голос.
                       threadID INT REFERENCES threads(id),  -- ID  треда
 
@@ -54,7 +126,7 @@ CREATE OR REPLACE FUNCTION addVoteForThread() RETURNS TRIGGER AS
 $$
 BEGIN
     UPDATE threads SET votes = votes + NEW."voice" WHERE id = NEW."threadid";
-    RETURN NEW;
+RETURN NEW;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -68,12 +140,31 @@ CREATE TRIGGER addVoteForThreadTrigger AFTER INSERT ON "votes"
 CREATE OR REPLACE FUNCTION changeVoteForThread() RETURNS TRIGGER AS
 $$
 BEGIN
-    UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
-    RETURN NEW;
+    IF OLD.voice = NEW.voice THEN
+        RETURN OLD;
+ELSE
+UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
+RETURN NEW;
+END IF;
 END;
 $$
 LANGUAGE 'plpgsql';
 
+DROP TRIGGER IF EXISTS changeVoteForThreadTrigger ON "votes" CASCADE;
 CREATE TRIGGER changeVoteForThreadTrigger AFTER UPDATE ON "votes"
     FOR EACH ROW
     EXECUTE PROCEDURE changeVoteForThread();
+
+
+------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS usersOnForums CASCADE;
+CREATE TABLE usersOnForums (
+    nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
+    fullname TEXT NOT NULL,  -- Полное имя пользователя.
+    about TEXT,  -- Описание пользователя.
+    email CITEXT NOT NULL,  -- Почтовый адрес пользователя (уникальное поле).
+    slug CITEXT NOT NULL REFERENCES forums(slug),  -- Человекопонятный URL. Уникальное поле.
+
+    CONSTRAINT user_on_forum UNIQUE (nickname, slug)
+);
