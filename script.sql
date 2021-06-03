@@ -113,6 +113,23 @@ CREATE TRIGGER setPathForPostTrigger BEFORE INSERT ON "posts"
 
 ------------------------------------------------------------------------
 
+CREATE OR REPLACE FUNCTION setPostIsEdited() RETURNS TRIGGER AS
+$$
+BEGIN
+    IF NEW.message = '' OR NEW.message = OLD.message THEN
+        RETURN NEW;
+    ELSE
+        NEW.isedited=true;
+        RETURN NEW;
+    END IF;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER setPostIsEditedTrigger BEFORE UPDATE ON "posts"
+    FOR EACH ROW
+    EXECUTE PROCEDURE setPostIsEdited();
+
 DROP TABLE IF EXISTS votes CASCADE;
 CREATE TABLE votes(
                       nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
@@ -142,10 +159,10 @@ $$
 BEGIN
     IF OLD.voice = NEW.voice THEN
         RETURN OLD;
-ELSE
-UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
-RETURN NEW;
-END IF;
+    ELSE
+        UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
+        RETURN NEW;
+    END IF;
 END;
 $$
 LANGUAGE 'plpgsql';
