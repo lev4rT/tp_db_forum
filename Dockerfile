@@ -58,4 +58,4 @@ COPY --from=build /opt/build/golang/ .
 #
 # Запускаем PostgreSQL и сервер
 #
-CMD service postgresql start && main
+CMD service postgresql start && ./main
