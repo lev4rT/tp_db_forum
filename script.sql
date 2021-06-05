@@ -1,15 +1,19 @@
 CREATE EXTENSION IF NOT EXISTS citext;
 
 DROP TABLE IF EXISTS users CASCADE;
-CREATE TABLE users (
-                       nickname CITEXT NOT NULL UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
+CREATE UNLOGGED TABLE users (
+                       nickname CITEXT UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
                        fullname TEXT NOT NULL,  -- Полное имя пользователя.
                        about TEXT,  -- Описание пользователя.
-                       email CITEXT NOT NULL UNIQUE  -- Почтовый адрес пользователя (уникальное поле).
+                       email CITEXT NOT NULL UNIQUE -- Почтовый адрес пользователя (уникальное поле).
 );
+DROP INDEX IF EXISTS usersNickname;
+CREATE INDEX IF NOT EXISTS usersNickname ON users USING HASH (nickname);
+DROP INDEX IF EXISTS usersEmail;
+CREATE INDEX IF NOT EXISTS usersEmail ON users USING HASH (email);
 
 DROP TABLE IF EXISTS forums CASCADE;
-CREATE TABLE forums (
+CREATE UNLOGGED TABLE forums (
                         title TEXT NOT NULL,  -- Название форума.
                         "user" CITEXT NOT NULL REFERENCES users(nickname) ,  -- Nickname пользователя, который отвечает за форум.
                         slug CITEXT NOT NULL UNIQUE PRIMARY KEY,  -- Человекопонятный URL. Уникальное поле.
@@ -18,7 +22,7 @@ CREATE TABLE forums (
 );
 
 DROP TABLE IF EXISTS threads CASCADE;
-CREATE TABLE threads (
+CREATE UNLOGGED TABLE threads (
                          id SERIAL NOT NULL PRIMARY KEY,  -- Идентификатор ветки обсуждения.
                          title TEXT NOT NULL,  -- Заголовок ветки обсуждения.
                          author CITEXT NOT NULL REFERENCES users(nickname),  -- Пользователь, создавший данную тему.
@@ -28,7 +32,17 @@ CREATE TABLE threads (
                          slug CITEXT,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
                          created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
 );
-CREATE INDEX threadsForumAuthorSlugIndex ON threads(forum, author, slug);
+DROP INDEX IF EXISTS threadsID;
+CREATE INDEX IF NOT EXISTS threadsID ON threads(id);
+
+DROP INDEX IF EXISTS threadsForum;
+CREATE INDEX IF NOT EXISTS threadsForum ON threads USING HASH (forum);
+
+DROP INDEX IF EXISTS threadsSlug;
+CREATE INDEX IF NOT EXISTS threadsSlug ON threads(slug);
+
+DROP INDEX IF EXISTS threadsForumAuthorTitle;
+CREATE INDEX IF NOT EXISTS threadsForumAuthorTitle ON threads(forum, author, title);
 
 ------------------------------------------------------------------------
 
@@ -55,7 +69,7 @@ CREATE TRIGGER appendThreadsCounterForumTrigger AFTER INSERT ON "threads"
 ------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS posts CASCADE;
-CREATE TABLE posts (
+CREATE UNLOGGED TABLE posts (
                        id BIGSERIAL NOT NULL PRIMARY KEY,  -- Идентификатор данного сообщения.
                        parent BIGINT DEFAULT 0,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
                        author CITEXT NOT NULL REFERENCES users(nickname),  -- Автор, написавший данное сообщение.
@@ -68,6 +82,21 @@ CREATE TABLE posts (
 
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
+DROP INDEX IF EXISTS postsID;
+CREATE INDEX IF NOT EXISTS postsID ON posts(id);
+
+DROP INDEX IF EXISTS postsThreadID;
+CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
+
+DROP INDEX IF EXISTS postsPath1DescID;
+CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]) DESC, id);
+
+DROP INDEX IF EXISTS postsThreadIDPath1Parent;
+CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
+
+DROP INDEX IF EXISTS postsThreadPathID;
+CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
+
 
 ------------------------------------------------------------------------
 
@@ -131,13 +160,14 @@ CREATE TRIGGER setPostIsEditedTrigger BEFORE UPDATE ON "posts"
     EXECUTE PROCEDURE setPostIsEdited();
 
 DROP TABLE IF EXISTS votes CASCADE;
-CREATE TABLE votes(
+CREATE UNLOGGED TABLE votes(
                       nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
                       voice SMALLINT,  -- Отданный голос.
                       threadID INT REFERENCES threads(id),  -- ID  треда
 
-                      CONSTRAINT unique_vote UNIQUE (nickname, threadID)
+                      CONSTRAINT uniqueVote UNIQUE (nickname, threadID)
 );
+-- CREATE UNIQUE INDEX OF NOT EXISTS votesNicknameThreadID ON votes(nickname, threadID)
 
 CREATE OR REPLACE FUNCTION addVoteForThread() RETURNS TRIGGER AS
 $$
@@ -176,12 +206,13 @@ CREATE TRIGGER changeVoteForThreadTrigger AFTER UPDATE ON "votes"
 ------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS usersOnForums CASCADE;
-CREATE TABLE usersOnForums (
+CREATE UNLOGGED TABLE usersOnForums (
     nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
     fullname TEXT NOT NULL,  -- Полное имя пользователя.
     about TEXT,  -- Описание пользователя.
     email CITEXT NOT NULL,  -- Почтовый адрес пользователя (уникальное поле).
-    slug CITEXT NOT NULL REFERENCES forums(slug),  -- Человекопонятный URL. Уникальное поле.
-
-    CONSTRAINT user_on_forum UNIQUE (nickname, slug)
+    slug CITEXT NOT NULL REFERENCES forums(slug)  -- Человекопонятный URL. Уникальное поле.
 );
+
+DROP INDEX IF EXISTS usersOnForumsNicknameSlug;
+CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(slug, nickname);

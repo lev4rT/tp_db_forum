@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -23,21 +22,12 @@ func simpleGet(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "You came and you get it!")
 }
 
-//var threadIDForum map[int]string
-//var threadIDMaxPostID map[int]int64
-var threadIDForum sync.Map
-//var threadIDMaxPostID map[int]int64
-
 func main() {
-	//threadIDForum = make(map[int]string)
-	//threadIDMaxPostID = make(map[int]int64)
-
-	// Connect to postgreSql db
 	DB, _ = sql.Open(
 		"postgres",
-		fmt.Sprint("user=postgres "+
-			"password=admin "+
-			"dbname=postgres "+
+		fmt.Sprint("user=docker "+
+			"password=docker "+
+			"dbname=docker "+
 			"host=localhost "+
 			"port=5432 "),
 	)
@@ -137,31 +127,6 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 			panic(err)
 		}
 		return
-		//switch err.Constraint {
-		//case "users_email_key":
-		//	fmt.Println(user)
-		//	DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE email=$1`, user.Email).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
-		//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		//	w.WriteHeader(http.StatusConflict)
-		//	fmt.Println(user)
-		//	conflictUsers = append(conflictUsers, user)
-		//	if err := json.NewEncoder(w).Encode(conflictUsers); err != nil {
-		//		panic(err)
-		//	}
-		//	return
-		//case "users_pkey":
-		//	DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE nickname=$1`, user.Nickname).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
-		//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		//	w.WriteHeader(http.StatusConflict)
-		//	var response[] User
-		//	if err := json.NewEncoder(w).Encode(append(response, user)); err != nil {
-		//		panic(err)
-		//	}
-		//	return
-		//default:
-		//	fmt.Println(err.Constraint)
-		//	panic(err)
-		//}
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -312,8 +277,6 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 	DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 	DB.QueryRow(fmt.Sprintf("SELECT slug FROM forums WHERE slug='%s'", thread.Forum)).Scan(&thread.Forum)
 
-	//threadIDForum.Store(thread.ID, thread.Forum)
-	//threadIDForum[thread.ID] = thread.Forum
 	if err := json.NewEncoder(w).Encode(thread); err != nil {
 		panic(err)
 	}
@@ -339,13 +302,11 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 
 	_, err := DB.Exec(`INSERT INTO votes(nickname, voice, threadID) VALUES ($1, $2, $3)`, vote.Nickname, vote.Voice, vote.ThreadID)
 	if err, ok := err.(*pq.Error); ok {
-		//fmt.Println(vote.Voice, vote.ThreadID, vote.Nickname)
-		//fmt.Println("Constraint:", err.Constraint)
 		switch err.Constraint {
-		case "unique_vote":
+		case "uniquevote":
 			DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
 			break
-		case "votes_threadid_fkey", "posts_author_fkey", "votes_nickname_fkey":
+		case "votes_threadid_fkey", "posts_author_fkey", "votesnicknamethreadid", "votes_nickname_fkey":
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -517,7 +478,7 @@ func getUserInfo (w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Println(user)
+	//fmt.Println(user)
 	json.NewEncoder(w).Encode(user)
 }
 
@@ -529,7 +490,24 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 
 	if user == (User{}) {
 		err := DB.QueryRow(`SELECT fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Fullname, &user.About, &user.Email)
-		if err != nil {
+		if err, ok := err.(*pq.Error); ok {
+			fmt.Println("Severity:", err.Severity)
+			fmt.Println("Code:", err.Code)
+			fmt.Println("Message:", err.Message)
+			fmt.Println("Detail:", err.Detail)
+			fmt.Println("Hint:", err.Hint)
+			fmt.Println("Position:", err.Position)
+			fmt.Println("InternalPosition:", err.InternalPosition)
+			fmt.Println("Where:", err.Where)
+			fmt.Println("Schema:", err.Schema)
+			fmt.Println("Table:", err.Table)
+			fmt.Println("Column:", err.Column)
+			fmt.Println("DataTypeName:", err.DataTypeName)
+			fmt.Println("Constraint:", err.Constraint)
+			fmt.Println("File:", err.File)
+			fmt.Println("Line:", err.Line)
+			fmt.Println("Routine:", err.Routine)
+
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -542,7 +520,7 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 		user.Nickname = nickname
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
-		fmt.Println(user)
+		//fmt.Println(user)
 		json.NewEncoder(w).Encode(user)
 		return
 	}
@@ -604,7 +582,7 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Println(user)
+	//fmt.Println(user)
 	json.NewEncoder(w).Encode(updatedUser)
 }
 
@@ -672,7 +650,7 @@ func getThreadsInfo (w http.ResponseWriter, r *http.Request) {
 	}
 	query += "LIMIT " + limit
 
-	fmt.Println(query)
+	//fmt.Println(query)
 	res, _ := DB.Query(query)
 	if res == nil {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -728,6 +706,15 @@ func getThreadInfo (w http.ResponseWriter, r *http.Request) {
 func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	threadSlugOrId, _ := vars["slug_or_id"]
+	v := r.URL.Query()
+	limitParam := v.Get("limit")
+	if limitParam == "" {
+		limitParam = "100"
+	}
+	sinceParam := v.Get("since")
+	sinceParam = strings.Replace(sinceParam, "T", " ", -1)
+	sortParam := v.Get("sort")
+	descParam, _ := strconv.ParseBool(v.Get("desc"))
 	threadID := 0
 
 	DB.QueryRow(fmt.Sprintf("SELECT id FROM threads WHERE slug='%s'", threadSlugOrId)).Scan(&threadID)
@@ -744,87 +731,42 @@ func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	v := r.URL.Query()
-	limit := v.Get("limit")
-	since := v.Get("since")
-	since = strings.Replace(since, "T", " ", -1)
-	sort := v.Get("sort")
-	if sort == "" {
-		sort = "flat"
+	sortOrder := "ASC"
+	if descParam {
+		sortOrder = "DESC"
 	}
-	desc, _ := strconv.ParseBool(v.Get("desc"))
-
-	query := fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE thread=%d ", threadID)
-	if since != "" && sort != "tree" {
-		//query += "AND created >= '" + since + "' "
-		query += "AND id"
-		if desc {
-			query += "<" + since + " "
-		} else {
-			query += ">" + since + " "
-		}
+	compare := ">"
+	if descParam {
+		compare = "<"
 	}
 
-	if sort == "flat" {
-		query += "ORDER BY id "
-		if desc {
-			query += "DESC "
+	query := "SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE "
+	if sortParam == "" || sortParam == "flat" {
+		since := ""
+		if sinceParam != "" {
+			since = "AND id" + compare + sinceParam
+		}
+		query += fmt.Sprintf("thread=%d %s ORDER BY id %s LIMIT %s", threadID, since, sortOrder, limitParam)
+	} else if sortParam == "tree" {
+		since := ""
+		if sinceParam != "" {
+			since = "AND path " + compare + "( SELECT path FROM posts WHERE id = " + sinceParam + ")"
+		}
+		query += fmt.Sprintf("thread=%d %s ORDER BY path %s, id %s LIMIT %s", threadID, since, sortOrder, sortOrder, limitParam)
+	} else if sortParam == "parent_tree" {
+		since := ""
+		if sinceParam != "" {
+			since = fmt.Sprintf("AND path[1] %s (SELECT path[1] FROM posts WHERE id=%s)", compare, sinceParam)
+		}
+		query += fmt.Sprintf("path[1] IN (SELECT id FROM posts WHERE thread=%d AND parent=0 %s ORDER BY id %s LIMIT %s) ", threadID, since, sortOrder, limitParam)
+		if descParam {
+			query += "ORDER BY path[1] DESC, path, id"
 		} else {
-			query += "ASC "
-		}
-	} else if sort == "tree" {
-		sign := ">"
-		if desc {
-			sign = "<"
-		}
-		if since != "" {
-			query += fmt.Sprintf("AND path %s (SELECT path FROM posts WHERE id =%s)", sign, since)
-		}
-		query += "ORDER BY path "
-		if desc {
-			query += "DESC, "
-		} else {
-			query += "ASC, "
-		}
-		query += "id "
-		if desc {
-			query += "DESC "
-		} else {
-			query += "ASC "
-		}
-	}
-	if limit == "" {
-		limit = "100"
-	}
-	query += "LIMIT " + limit
-
-
-	if sort == "parent_tree" {
-		sign := ">"
-		if desc {
-			sign = "<"
-		}
-		sort := "ASC"
-		if desc {
-			sort = "DESC"
-		}
-		pathParam := "path"
-		if desc {
-			pathParam += "[1]"
-		}
-		if since == "" {
-			query = fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE path[1] IN (SELECT id FROM posts WHERE thread = %d AND parent = 0 ORDER BY id %s LIMIT %s) ORDER BY ", threadID, sort, limit)
-		} else {
-			query = fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE path[1] IN (SELECT id FROM posts WHERE thread = %d AND parent = 0 AND path[1] %s (SELECT path[1] FROM posts WHERE id = %s) ORDER BY id %s LIMIT %s) ORDER BY ", threadID, sign, since, sort, limit)
-		}
-		if desc {
-			query += fmt.Sprintf("path[1] DESC, path, id")
-		} else {
-			query += fmt.Sprintf("path, id")
+			query += "ORDER BY path, id"
 		}
 	}
 
-	fmt.Println(query)
+	//fmt.Println(query)
 	res, _ := DB.Query(query)
 	if res == nil {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -834,7 +776,6 @@ func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
 	defer res.Close()
 
 	posts := make([]Post, 0)
@@ -926,7 +867,6 @@ func getForumUsers (w http.ResponseWriter, r *http.Request) {
 	}
 	query += fmt.Sprintf(" LIMIT %s ", limit)
 
-	fmt.Println(query)
 	res, _ := DB.Query(query)
 	if res == nil {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -990,17 +930,6 @@ func getPostInfo (w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(jsonAnswer)
-	//for elem, _ := range related {
-	//	if elem == "user" {
-	//
-	//	}
-	//}
-
-
-
-	//var author User
-	//var forum Forum
-	//var thread Thread
 }
 
 func changePostMessage (w http.ResponseWriter, r *http.Request) {
@@ -1046,15 +975,6 @@ func changePostMessage (w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(newPost)
-
-	//v := r.URL.Query()
-	//related := v.Get("related")
-
-
-
-	//var author User
-	//var forum Forum
-	//var thread Thread
 }
 
 type Service struct {
