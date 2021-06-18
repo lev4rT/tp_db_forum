@@ -1,14 +1,11 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
-	"github.com/lib/pq"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -16,30 +13,32 @@ import (
 	"time"
 )
 
-var DB *sql.DB
 
 func simpleGet(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "You came and you get it!")
 }
 
+var DB *pgx.ConnPool
+
 func main() {
-	DB, _ = sql.Open(
-		"postgres",
-		fmt.Sprint("user=docker "+
-			"password=docker "+
-			"dbname=docker "+
-			"host=localhost "+
-			"port=5432 "),
-	)
-	defer DB.Close()
-	if err := DB.Ping(); err != nil {
-		log.Fatal(err)
+	config, err := pgx.ParseConnectionString(fmt.Sprintf("user=%s password=%s dbname=%s port=%s", "docker", "docker", "docker", "5432"))
+	if err != nil {
+		panic(err)
+	}
+
+	config.PreferSimpleProtocol = true
+	connPoolConfig := pgx.ConnPoolConfig { ConnConfig: config, MaxConnections: 50, AcquireTimeout: 0, AfterConnect: nil }
+
+	DB, err = pgx.NewConnPool(connPoolConfig)
+	if err != nil {
+		panic(err)
 	}
 
 	path := filepath.Join("script.sql")
 	c, _ := ioutil.ReadFile(path)
 	scriptString := string(c)
 	DB.Exec(scriptString)
+
 
 	r := mux.NewRouter()
 
@@ -61,7 +60,7 @@ func main() {
 	r.HandleFunc("/api/post/{id}/details", changePostMessage).Methods("POST")
 	r.HandleFunc("/api/service/status", getServiceStatus).Methods("GET")
 
-	err := http.ListenAndServe(":5000", r)
+	err = http.ListenAndServe(":5000", r)
 	if err != nil {
 		panic(err)
 	}
@@ -90,24 +89,39 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&user)
 
 	_, err := DB.Exec(`INSERT INTO users(nickname, fullname, about, email) VALUES ($1, $2, $3, $4)`, user.Nickname, user.Fullname, user.About, user.Email)
-	if _, ok := err.(*pq.Error); ok {
-		var conflictUsers[] User
-		var conflictUser1 User
-		var conflictUser2 User
-		DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE email=$1`, user.Email).Scan(&conflictUser1.Nickname, &conflictUser1.Fullname, &conflictUser1.About, &conflictUser1.Email)
-		if conflictUser1.Nickname != "" {
-			conflictUsers = append(conflictUsers, conflictUser1)
+	if err != nil  {
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
+			res, _ := DB.Query(`SELECT nickname, fullname, about, email FROM users WHERE email=$1 or nickname=$2`, user.Email, user.Nickname)
+			defer res.Close()
+
+			users := make([]User, 0)
+			for res.Next() {
+				var user User
+				res.Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
+				users = append(users, user)
+			}
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(users)
+			return
+
+			//w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			//w.WriteHeader(http.StatusOK)
+			//json.NewEncoder(w).Encode(users)
+			//
+			//
+			//var conflictUsers[] User
+			//var conflictUser User
+			//DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE email=$1 or nickname=$2`, user.Email, user.Nickname).Scan(&conflictUser.Nickname, &conflictUser.Fullname, &conflictUser.About, &conflictUser.Email)
+			//w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			//w.WriteHeader(http.StatusConflict)
+			//conflictUsers = append(conflictUsers, conflictUser)
+			//if err := json.NewEncoder(w).Encode(conflictUsers); err != nil {
+			//	panic(err)
+			//}
+			//return
 		}
-		DB.QueryRow(`SELECT nickname, fullname, about, email FROM users WHERE nickname=$1`, user.Nickname).Scan(&conflictUser2.Nickname, &conflictUser2.Fullname, &conflictUser2.About, &conflictUser2.Email)
-		if conflictUser2.Nickname != "" && conflictUser2 != conflictUser1{
-			conflictUsers = append(conflictUsers, conflictUser2)
-		}
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusConflict)
-		if err := json.NewEncoder(w).Encode(conflictUsers); err != nil {
-			panic(err)
-		}
-		return
+
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -133,10 +147,19 @@ func createForum(w http.ResponseWriter, r *http.Request) {
 	var forum Forum
 	json.NewDecoder(r.Body).Decode(&forum)
 
-	res, err := DB.Query(`INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3) RETURNING title, "user", slug`, forum.Title, forum.User, forum.Slug)
-	if err, ok := err.(*pq.Error); ok {
-		switch err.Constraint {
-		case "forums_user_fkey":
+	_, err := DB.Exec(`INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3)`, forum.Title, forum.User, forum.Slug)
+
+	if err != nil {
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
+			DB.QueryRow(`SELECT title, "user", slug, posts, threads FROM forums WHERE slug=$1`, forum.Slug).Scan(&forum.Title, &forum.User,  &forum.Slug, &forum.Posts, &forum.Threads)
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusConflict)
+			if err := json.NewEncoder(w).Encode(forum); err != nil {
+				panic(err)
+			}
+			return
+		}
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23503" {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -145,22 +168,10 @@ func createForum(w http.ResponseWriter, r *http.Request) {
 				panic(err)
 			}
 			return
-		case "forums_pkey":
-			DB.QueryRow(`SELECT title, "user", slug, posts, threads FROM forums WHERE slug=$1`, forum.Slug).Scan(&forum.Title, &forum.User,  &forum.Slug, &forum.Posts, &forum.Threads)
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(forum); err != nil {
-				panic(err)
-			}
-			return
-		default:
-			return
 		}
 	}
 
-	if res != nil {
-		defer res.Close()
-	}
+
 	DB.QueryRow(`SELECT nickname FROM users WHERE nickname=$1`, forum.User).Scan(&forum.User)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusCreated)
@@ -198,17 +209,8 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := DB.Exec(`INSERT INTO threads(title, author, forum, message, votes, slug, created) VALUES ($1, $2, $3, $4, $5, $6, $7)`, thread.Title, thread.Author, thread.Forum, thread.Message, thread.Votes, thread.Slug, thread.Created)
-	if err, ok := err.(*pq.Error); ok {
-		switch err.Constraint {
-		case "unique_thread":
-			DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(thread); err != nil {
-				panic(err)
-			}
-			return
-		case "threads_forum_fkey", "threads_author_fkey":
+	if err != nil {
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23503" {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -218,7 +220,38 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
+			DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusConflict)
+			if err := json.NewEncoder(w).Encode(thread); err != nil {
+				panic(err)
+			}
+			return
+		}
 	}
+	//if err, ok := err.(*pq.Error); ok {
+	//	switch err.Constraint {
+	//	case "unique_thread":
+	//		DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//		w.WriteHeader(http.StatusConflict)
+	//		if err := json.NewEncoder(w).Encode(thread); err != nil {
+	//			panic(err)
+	//		}
+	//		return
+	//	case "threads_forum_fkey", "threads_author_fkey":
+	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//		w.WriteHeader(http.StatusNotFound)
+	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
+	//			"Author or forum slug doesnt exists",
+	//		}); err != nil {
+	//			panic(err)
+	//		}
+	//		return
+	//	}
+	//}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusCreated)
@@ -249,12 +282,9 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := DB.Exec(`INSERT INTO votes(nickname, voice, threadID) VALUES ($1, $2, $3)`, vote.Nickname, vote.Voice, vote.ThreadID)
-	if err, ok := err.(*pq.Error); ok {
-		switch err.Constraint {
-		case "uniquevote":
-			DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
-			break
-		case "votes_threadid_fkey", "posts_author_fkey", "votesnicknamethreadid", "votes_nickname_fkey":
+
+	if err != nil {
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23503" {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -263,10 +293,31 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 				panic(err)
 			}
 			return
-		default:
-			panic(err)
+		}
+
+		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
+			DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
 		}
 	}
+
+	//if err, ok := err.(*pq.Error); ok {
+	//	switch err.Constraint {
+	//	case "uniquevote":
+	//		DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
+	//		break
+	//	case "votes_threadid_fkey", "posts_author_fkey", "votesnicknamethreadid", "votes_nickname_fkey":
+	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//		w.WriteHeader(http.StatusNotFound)
+	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
+	//			"cant find thread!",
+	//		}); err != nil {
+	//			panic(err)
+	//		}
+	//		return
+	//	default:
+	//		panic(err)
+	//	}
+	//}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
@@ -319,12 +370,12 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: create a MAP to remove redundant SELECTs
-	threadID, forumSlug := "", ""
+	threadID, forumSlug := -1, ""
 	DB.QueryRow(`SELECT id, forum FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
-	if threadID == "" || forumSlug == "" {
+	if threadID == -1 || forumSlug == "" {
 		DB.QueryRow(`SELECT id, forum FROM threads WHERE id=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
 	}
-	if threadID == "" || forumSlug == "" {
+	if threadID == -1 || forumSlug == "" {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusNotFound)
 		if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -339,7 +390,7 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
 		posts[index].Forum = forumSlug
-		posts[index].Thread, _ = strconv.Atoi(threadID)
+		posts[index].Thread = threadID
 
 		if posts[index].Parent != 0 {
 			thread := 0
@@ -357,37 +408,48 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 	}
 	resultQueryValueString = strings.TrimRight(resultQueryValueString, ",")
 
-	res, err := DB.Query(fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
-	if err, ok := err.(*pq.Error); ok {
-		switch err.Constraint {
-		case "posts_thread_fkey":
+	//fmt.Printf("\nINSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString)
+	res, _ := DB.Query(fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
+	//if err, ok := err.(*pq.Error); ok {
+	//	switch err.Constraint {
+	//	case "posts_thread_fkey":
+	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//		w.WriteHeader(http.StatusNotFound)
+	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
+	//			"cant find thread!",
+	//		}); err != nil {
+	//			panic(err)
+	//		}
+	//		return
+	//	case "posts_author_fkey":
+	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//		w.WriteHeader(http.StatusNotFound)
+	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
+	//			"NO author!",
+	//		}); err != nil {
+	//			panic(err)
+	//		}
+	//		return
+	//	}
+	//}
+
+	defer res.Close()
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	for index, _ := range posts {
+		res.Next()
+		err := res.Scan(&posts[index].ID, &posts[index].Created)
+		if err != nil {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusNotFound)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
-				"cant find thread!",
-			}); err != nil {
-				panic(err)
-			}
-			return
-		case "posts_author_fkey":
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusNotFound)
-			if err := json.NewEncoder(w).Encode(ErrorMsg{
-				"NO author!",
+				"cant find something!",
 			}); err != nil {
 				panic(err)
 			}
 			return
 		}
 	}
-
-	defer res.Close()
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusCreated)
-	for index, _ := range posts {
-		res.Next()
-		res.Scan(&posts[index].ID, &posts[index].Created)
-	}
 	if err := json.NewEncoder(w).Encode(posts); err != nil {
 		panic(err)
 	}
@@ -419,17 +481,18 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 	nickname, _ := vars["nickname"]
 
 	if user == (User{}) {
-		err := DB.QueryRow(`SELECT fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Fullname, &user.About, &user.Email)
-		if _, ok := err.(*pq.Error); ok {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusNotFound)
-			if err := json.NewEncoder(w).Encode(ErrorMsg{
-				"User not found!",
-			}); err != nil {
-				panic(err)
-			}
-			return
-		}
+
+		/* err := */ DB.QueryRow(`SELECT fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Fullname, &user.About, &user.Email)
+		//if _, ok := err.(*pq.Error); ok {
+		//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		//	w.WriteHeader(http.StatusNotFound)
+		//	if err := json.NewEncoder(w).Encode(ErrorMsg{
+		//		"User not found!",
+		//	}); err != nil {
+		//		panic(err)
+		//	}
+		//	return
+		//}
 		user.Nickname = nickname
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
@@ -449,10 +512,13 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 	setQuery = strings.TrimRight(setQuery, ",") + " "
 
 	user.Nickname = nickname
-	res, err := DB.Query(fmt.Sprintf("UPDATE users SET %s  WHERE nickname='%s' RETURNING fullname, about, email", setQuery, user.Nickname))
-	if err, ok := err.(*pq.Error); ok {
-		switch err.Constraint {
-		case "users_email_key", "users_nickname_key":
+	//fmt.Printf("UPDATE users SET %s  WHERE nickname='%s' RETURNING fullname, about, email", setQuery, user.Nickname)
+	var updatedUser User
+	err := DB.QueryRow(fmt.Sprintf("UPDATE users SET %s  WHERE nickname='%s' RETURNING fullname, about, email", setQuery, user.Nickname)).Scan(&updatedUser.Fullname, &updatedUser.About, &updatedUser.Email)
+	if err != nil {
+		errPg, _ := err.(pgx.PgError)
+		//fmt.Println("\n\n", errPg.Code, errPg.Message)
+		if errPg.Code == "23505" {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 			w.WriteHeader(http.StatusConflict)
 			if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -463,10 +529,7 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	if res == nil {
+	if updatedUser == (User{}) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusNotFound)
 		if err := json.NewEncoder(w).Encode(ErrorMsg{
@@ -476,20 +539,34 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	updatedUser.Nickname = nickname
 
-	defer res.Close()
-	res.Next()
 
-	var updatedUser User
-	res.Scan(&updatedUser.Fullname, &updatedUser.About, &updatedUser.Email)
-	if updatedUser == (User{}) {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
-			"User not found!",
-		})
-		return
-	}
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//if res == nil {
+	//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//	w.WriteHeader(http.StatusNotFound)
+	//	if err := json.NewEncoder(w).Encode(ErrorMsg{
+	//		"User not found!",
+	//	}); err != nil {
+	//		panic(err)
+	//	}
+	//	return
+	//}
+	//
+	//defer res.Close()
+	//res.Next()
+	//
+	//var updatedUser User
+	//res.Scan(&updatedUser.Fullname, &updatedUser.About, &updatedUser.Email)
+	//if updatedUser == (User{}) {
+	//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	//	w.WriteHeader(http.StatusNotFound)
+	//	json.NewEncoder(w).Encode(ErrorMsg{
+	//		"User not found!",
+	//	})
+	//	return
+	//}
 	updatedUser.Nickname = nickname
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -729,9 +806,9 @@ func changeThreadInfo (w http.ResponseWriter, r *http.Request) {
 	}
 	setter = strings.TrimRight(setter, ",")
 
-	fmt.Printf("UPDATE threads SET %s WHERE id=%d", setter, threadID)
+	//fmt.Printf("UPDATE threads SET %s WHERE id=%d", setter, threadID)
 	DB.Exec(fmt.Sprintf("UPDATE threads SET %s WHERE id=%d", setter, threadID))
-	fmt.Printf("SELECT title, author, forum, message, votes, slug, created FROM threads WHERE id=%d", threadID)
+	//fmt.Printf("SELECT title, author, forum, message, votes, slug, created FROM threads WHERE id=%d", threadID)
 	DB.QueryRow(fmt.Sprintf("SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=%d", threadID)).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
