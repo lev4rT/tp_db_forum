@@ -866,12 +866,17 @@ func changePostMessage (w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	setQuery = strings.TrimRight(setQuery, ",") + " "
 
-	DB.QueryRow(context.Background(), fmt.Sprintf("UPDATE posts SET %s WHERE id = %d", setQuery, postID))
 
-	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE id=%d", postID)).Scan(&newPost.ID, &newPost.Parent, &newPost.Author, &newPost.Message, &newPost.IsEdited, &newPost.Forum, &newPost.Thread, &newPost.Created)
-	if newPost.ID == 0 {
+
+	var err error
+	if len(setQuery) > 0 {
+		setQuery = strings.TrimRight(setQuery, ",") + " "
+		err = DB.QueryRow(context.Background(), fmt.Sprintf("UPDATE posts SET %s WHERE id = %d RETURNING id, parent, author, message, isedited, forum, thread, created", setQuery, postID)).Scan(&newPost.ID, &newPost.Parent, &newPost.Author, &newPost.Message, &newPost.IsEdited, &newPost.Forum, &newPost.Thread, &newPost.Created)
+	} else {
+		err = DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE id=%d", postID)).Scan(&newPost.ID, &newPost.Parent, &newPost.Author, &newPost.Message, &newPost.IsEdited, &newPost.Forum, &newPost.Thread, &newPost.Created)
+	}
+	if err != nil {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(ErrorMsg{
@@ -879,9 +884,11 @@ func changePostMessage (w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(newPost)
+	return
 }
 
 type Service struct {
