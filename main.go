@@ -287,38 +287,10 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 	var posts[] Post
 	vars := mux.Vars(r)
 	threadSlugOrId, _ := vars["slug_or_id"]
+	threadSlugOrIdConverted, _ := strconv.Atoi(threadSlugOrId)
 	json.NewDecoder(r.Body).Decode(&posts)
-	if len(posts) == 0 {
-		threadID := 0
-		DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE id=%s", threadSlugOrId)).Scan(&threadID)
-		if threadID == 0 {
-			DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE slug='%s'", threadSlugOrId)).Scan(&threadID)
-		}
-		if threadID == 0 {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusNotFound)
-			if err := json.NewEncoder(w).Encode(ErrorMsg{
-				"cant find thread!",
-			}); err != nil {
-				panic(err)
-			}
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(posts); err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	// TODO: create a MAP to remove redundant SELECTs
 	threadID, forumSlug := -1, ""
-	DB.QueryRow(context.Background(), `SELECT id, forum FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
-	if threadID == -1 || forumSlug == "" {
-		DB.QueryRow(context.Background(), `SELECT id, forum FROM threads WHERE id=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
-	}
+	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
 	if threadID == -1 || forumSlug == "" {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusNotFound)
@@ -329,6 +301,44 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(posts) == 0 {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(posts); err != nil {
+			panic(err)
+		}
+		return
+	}
+
+
+	if posts[0].Parent != 0 {
+		var pThread int
+		err := DB.QueryRow(context.Background(),
+			"SELECT thread FROM posts WHERE id = $1",
+			posts[0].Parent,
+		).Scan(&pThread)
+
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusConflict)
+			if err = json.NewEncoder(w).Encode(ErrorMsg{
+				"cant find thread!",
+			}); err != nil {
+				panic(err)
+			}
+			return
+		}
+
+		if pThread != threadID {
+			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(ErrorMsg{
+				"Parent post was created in another thread!",
+			})
+			return
+		}
+	}
+
 
 	resultQueryValueString := ""
 	// TODO: Validate PARENTS POST SOMEHOW!
@@ -336,62 +346,40 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
 
-		if posts[index].Parent != 0 {
-			thread := 0
-			DB.QueryRow(context.Background(), fmt.Sprintf("SELECT thread FROM posts WHERE id=%d", posts[index].Parent)).Scan(&thread)
-			if thread != posts[index].Thread {
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(ErrorMsg{
-					"Parent post was created in another thread!",
-				})
-				return
-			}
-		}
+		//if posts[index].Parent != 0 {
+		//	thread := 0
+		//	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT thread FROM posts WHERE id=%d", posts[index].Parent)).Scan(&thread)
+		//	if thread != posts[index].Thread {
+		//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		//		w.WriteHeader(http.StatusConflict)
+		//		json.NewEncoder(w).Encode(ErrorMsg{
+		//			"Parent post was created in another thread!",
+		//		})
+		//		return
+		//	}
+		//}
 		resultQueryValueString += fmt.Sprintf("(%d, '%s', '%s', %d, '%s'),", posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum)
 	}
 	resultQueryValueString = strings.TrimRight(resultQueryValueString, ",")
 
-	//fmt.Printf("\nINSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString)
 	res, _ := DB.Query(context.Background(), fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
-	//if err, ok := err.(*pq.Error); ok {
-	//	switch err.Constraint {
-	//	case "posts_thread_fkey":
-	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	//		w.WriteHeader(http.StatusNotFound)
-	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
-	//			"cant find thread!",
-	//		}); err != nil {
-	//			panic(err)
-	//		}
-	//		return
-	//	case "posts_author_fkey":
-	//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	//		w.WriteHeader(http.StatusNotFound)
-	//		if err := json.NewEncoder(w).Encode(ErrorMsg{
-	//			"NO author!",
-	//		}); err != nil {
-	//			panic(err)
-	//		}
-	//		return
-	//	}
-	//}
 
 	defer res.Close()
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	var err error
 	for index, _ := range posts {
 		res.Next()
-		err := res.Scan(&posts[index].ID, &posts[index].Created)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusNotFound)
-			if err := json.NewEncoder(w).Encode(ErrorMsg{
-				"cant find something!",
-			}); err != nil {
-				panic(err)
-			}
-			return
+		err = res.Scan(&posts[index].ID, &posts[index].Created)
+	}
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.WriteHeader(http.StatusNotFound)
+		if err := json.NewEncoder(w).Encode(ErrorMsg{
+			"cant find something!",
+		}); err != nil {
+			panic(err)
 		}
+		return
 	}
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(posts); err != nil {
