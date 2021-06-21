@@ -22,13 +22,18 @@ import (
 var DB *pgxpool.Pool
 
 func main() {
-	urlExample := "postgres://docker:docker@localhost:5432/docker"
-	DB,_ = pgxpool.Connect(context.Background(), urlExample)
+	urlExample := "host=localhost user=docker password=docker dbname=docker sslmode=disable"
+	config, _ := pgxpool.ParseConfig(urlExample)
+	config.MaxConns = 100
+	config.AfterConnect = nil
+	DB,_ = pgxpool.ConnectConfig(context.Background(), config)
+
 
 	path := filepath.Join("script.sql")
 	c, _ := ioutil.ReadFile(path)
 	scriptString := string(c)
 	DB.Exec(context.Background(), scriptString)
+	defer DB.Close()
 
 
 	r := router.New()
@@ -51,31 +56,6 @@ func main() {
 	r.GET("/api/service/status", getServiceStatus)
 
 	log.Fatal(fasthttp.ListenAndServe(":5000", r.Handler))
-
-	//r := mux.NewRouter()
-
-	//r.HandleFunc("/api/service/clear", dbClearAll).Methods("POST")
-	//r.HandleFunc("/api/user/{nickname}/create", createUser).Methods("POST")
-	//r.HandleFunc("/api/forum/create", createForum).Methods("POST")
-	//r.HandleFunc("/api/forum/{slug}/create", createThread).Methods("POST")
-	//r.HandleFunc("/api/thread/{slug_or_id}/vote", voteThread).Methods("POST")
-	//r.HandleFunc("/api/thread/{slug_or_id}/create", createPost).Methods("POST")
-	//r.HandleFunc("/api/user/{nickname}/profile", getUserInfo).Methods("GET")
-	//r.HandleFunc("/api/user/{nickname}/profile", changeUserInfo).Methods("POST")
-	//r.HandleFunc("/api/forum/{slug}/details", getForumInfo).Methods("GET")
-	//r.HandleFunc("/api/forum/{slug}/threads", getThreadsInfo).Methods("GET")
-	//r.HandleFunc("/api/thread/{slug_or_id}/details", getThreadInfo).Methods("GET")
-	//r.HandleFunc("/api/thread/{slug_or_id}/posts", getThreadPosts).Methods("GET")
-	//r.HandleFunc("/api/thread/{slug_or_id}/details", changeThreadInfo).Methods("POST")
-	//r.HandleFunc("/api/forum/{slug}/users", getForumUsers).Methods("GET")
-	//r.HandleFunc("/api/post/{id}/details", getPostInfo).Methods("GET")
-	//r.HandleFunc("/api/post/{id}/details", changePostMessage).Methods("POST")
-	//r.HandleFunc("/api/service/status", getServiceStatus).Methods("GET")
-
-	//err := http.ListenAndServe(":5000", r)
-	//if err != nil {
-	//	panic(err)
-	//}
 }
 
 var (
@@ -301,14 +281,13 @@ type Post struct {
 }
 
 func createPost (ctx *fasthttp.RequestCtx) {
-	var posts[] Post
+	posts := make([]Post, 0)
 	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 	threadSlugOrIdConverted, _ := strconv.Atoi(threadSlugOrId)
 	json.Unmarshal(ctx.PostBody(), &posts)
 	threadID, forumSlug := -1, ""
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
 	if threadID == -1 || forumSlug == "" {
-
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
 		json.NewEncoder(ctx).Encode(ErrorMsg{
@@ -351,29 +330,21 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	}
 
 
-	resultQueryValueString := ""
+	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum) VALUES `
+	var queryArguments []interface{}
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
 
-		//if posts[index].Parent != 0 {
-		//	thread := 0
-		//	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT thread FROM posts WHERE id=%d", posts[index].Parent)).Scan(&thread)
-		//	if thread != posts[index].Thread {
-		//		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		//		w.WriteHeader(http.StatusConflict)
-		//		json.NewEncoder(w).Encode(ErrorMsg{
-		//			"Parent post was created in another thread!",
-		//		})
-		//		return
-		//	}
-		//}
-		resultQueryValueString += fmt.Sprintf("(%d, '%s', '%s', %d, '%s'),", posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum)
+		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d),", index*5+1, index*5+2, index*5+3, index*5+4, index*5+5)
+		queryArguments = append(queryArguments, posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum)
 	}
-	resultQueryValueString = strings.TrimRight(resultQueryValueString, ",")
+	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id, created;"
 
-	res, _ := DB.Query(context.Background(), fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
+	//start := time.Now()
+	res, _ := DB.Query(context.Background(), resultQueryString, queryArguments...)
+	//fmt.Printf("Query time: %s\n request: INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", time.Since(start), resultQueryValueString)
 
 	defer res.Close()
 	var err error
