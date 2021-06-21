@@ -344,7 +344,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	//start := time.Now()
 	res, _ := DB.Query(context.Background(), resultQueryString, queryArguments...)
-	//fmt.Printf("Query time: %s\n request: INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", time.Since(start), resultQueryValueString)
+	//fmt.Printf("Query time: %s\n", time.Since(start))
 
 	defer res.Close()
 	var err error
