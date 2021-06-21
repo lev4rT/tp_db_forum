@@ -9,6 +9,7 @@ CREATE UNLOGGED TABLE users (
 );
 DROP INDEX IF EXISTS usersNickname;
 CREATE INDEX IF NOT EXISTS usersNickname ON users USING HASH (nickname);
+
 DROP INDEX IF EXISTS usersEmail;
 CREATE INDEX IF NOT EXISTS usersEmail ON users USING HASH (email);
 
@@ -20,6 +21,11 @@ CREATE UNLOGGED TABLE forums (
                         posts BIGINT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
                         threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
+DROP INDEX IF EXISTS forumsSlug;
+CREATE INDEX forumsSlug ON forums USING HASH (slug);
+
+DROP INDEX IF EXISTS forumsUser;
+CREATE INDEX forumsUser ON forums ("user");
 
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE UNLOGGED TABLE threads (
@@ -32,17 +38,11 @@ CREATE UNLOGGED TABLE threads (
                          slug CITEXT,  -- Человекопонятный URL. В данной структуре slug опционален и не может быть числом.
                          created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
 );
-DROP INDEX IF EXISTS threadsID;
-CREATE INDEX IF NOT EXISTS threadsID ON threads(id);
-
 DROP INDEX IF EXISTS threadsForum;
 CREATE INDEX IF NOT EXISTS threadsForum ON threads USING HASH (forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE INDEX IF NOT EXISTS threadsSlug ON threads(slug);
-
-DROP INDEX IF EXISTS threadsForumAuthorTitle;
-CREATE INDEX IF NOT EXISTS threadsForumAuthorTitle ON threads(forum, author, title);
+CREATE INDEX IF NOT EXISTS threadsSlug ON threads USING HASH (slug);
 
 ------------------------------------------------------------------------
 
@@ -82,9 +82,6 @@ CREATE UNLOGGED TABLE posts (
 
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
-DROP INDEX IF EXISTS postsID;
--- CREATE INDEX IF NOT EXISTS postsID ON posts(id);
---
 DROP INDEX IF EXISTS postsThreadID;
 -- CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
 --
@@ -100,7 +97,29 @@ DROP INDEX IF EXISTS postsThreadPathID;
 
 ------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
+-- CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
+-- $$
+-- DECLARE
+--     nicknameUser CITEXT;
+--     fullnameUser TEXT;
+--     aboutUser TEXT;
+--     emailUser CITEXT;
+-- BEGIN
+--     UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
+--     SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+--     INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
+--     RETURN NEW;
+-- END;
+-- $$
+-- LANGUAGE 'plpgsql';
+--
+-- CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
+--     FOR EACH ROW
+--     EXECUTE PROCEDURE appendPostsCounterForum();
+
+------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION setPathForPost() RETURNS TRIGGER AS
 $$
 DECLARE
     nicknameUser CITEXT;
@@ -108,29 +127,15 @@ DECLARE
     aboutUser TEXT;
     emailUser CITEXT;
 BEGIN
-    UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
-    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
-    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
-    RETURN NEW;
-END;
-$$
-LANGUAGE 'plpgsql';
-
-CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
-    FOR EACH ROW
-    EXECUTE PROCEDURE appendPostsCounterForum();
-
-------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION setPathForPost() RETURNS TRIGGER AS
-$$
-BEGIN
     IF NEW.parent = 0 THEN
         NEW.path = ARRAY [NEW.id];
     ELSE
         SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
         NEW.path = array_append(NEW.path, NEW.id);
     END IF;
+    UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
+    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
     RETURN NEW;
 END;
 $$
