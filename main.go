@@ -3,24 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/gorilla/mux"
+	"github.com/fasthttp/router"
 	"github.com/jackc/pgconn"
 	_ "github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/pkg/errors"
+	"github.com/valyala/fasthttp"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
-
-
-func simpleGet(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "You came and you get it!")
-}
 
 var DB *pgxpool.Pool
 
@@ -34,39 +31,65 @@ func main() {
 	DB.Exec(context.Background(), scriptString)
 
 
-	r := mux.NewRouter()
+	r := router.New()
+	r.POST("/api/service/clear", dbClearAll)
+	r.POST("/api/user/{nickname}/create", createUser)
+	r.POST("/api/forum/create", createForum)
+	r.POST("/api/forum/{slug}/create", createThread)
+	r.POST("/api/thread/{slug_or_id}/vote", voteThread)
+	r.POST("/api/thread/{slug_or_id}/create", createPost)
+	r.GET("/api/user/{nickname}/profile", getUserInfo)
+	r.POST("/api/user/{nickname}/profile", changeUserInfo)
+	r.GET("/api/forum/{slug}/details", getForumInfo)
+	r.GET("/api/forum/{slug}/threads", getThreadsInfo)
+	r.GET("/api/thread/{slug_or_id}/details", getThreadInfo)
+	r.GET("/api/thread/{slug_or_id}/posts", getThreadPosts)
+	r.POST("/api/thread/{slug_or_id}/details", changeThreadInfo)
+	r.GET("/api/forum/{slug}/users", getForumUsers)
+	r.GET("/api/post/{id}/details", getPostInfo)
+	r.POST("/api/post/{id}/details", changePostMessage)
+	r.GET("/api/service/status", getServiceStatus)
 
-	r.HandleFunc("/api/service/clear", dbClearAll).Methods("POST")
-	r.HandleFunc("/api/user/{nickname}/create", createUser).Methods("POST")
-	r.HandleFunc("/api/forum/create", createForum).Methods("POST")
-	r.HandleFunc("/api/forum/{slug}/create", createThread).Methods("POST")
-	r.HandleFunc("/api/thread/{slug_or_id}/vote", voteThread).Methods("POST")
-	r.HandleFunc("/api/thread/{slug_or_id}/create", createPost).Methods("POST")
-	r.HandleFunc("/api/user/{nickname}/profile", getUserInfo).Methods("GET")
-	r.HandleFunc("/api/user/{nickname}/profile", changeUserInfo).Methods("POST")
-	r.HandleFunc("/api/forum/{slug}/details", getForumInfo).Methods("GET")
-	r.HandleFunc("/api/forum/{slug}/threads", getThreadsInfo).Methods("GET")
-	r.HandleFunc("/api/thread/{slug_or_id}/details", getThreadInfo).Methods("GET")
-	r.HandleFunc("/api/thread/{slug_or_id}/posts", getThreadPosts).Methods("GET")
-	r.HandleFunc("/api/thread/{slug_or_id}/details", changeThreadInfo).Methods("POST")
-	r.HandleFunc("/api/forum/{slug}/users", getForumUsers).Methods("GET")
-	r.HandleFunc("/api/post/{id}/details", getPostInfo).Methods("GET")
-	r.HandleFunc("/api/post/{id}/details", changePostMessage).Methods("POST")
-	r.HandleFunc("/api/service/status", getServiceStatus).Methods("GET")
+	log.Fatal(fasthttp.ListenAndServe(":5000", r.Handler))
 
-	err := http.ListenAndServe(":5000", r)
-	if err != nil {
-		panic(err)
-	}
+	//r := mux.NewRouter()
+
+	//r.HandleFunc("/api/service/clear", dbClearAll).Methods("POST")
+	//r.HandleFunc("/api/user/{nickname}/create", createUser).Methods("POST")
+	//r.HandleFunc("/api/forum/create", createForum).Methods("POST")
+	//r.HandleFunc("/api/forum/{slug}/create", createThread).Methods("POST")
+	//r.HandleFunc("/api/thread/{slug_or_id}/vote", voteThread).Methods("POST")
+	//r.HandleFunc("/api/thread/{slug_or_id}/create", createPost).Methods("POST")
+	//r.HandleFunc("/api/user/{nickname}/profile", getUserInfo).Methods("GET")
+	//r.HandleFunc("/api/user/{nickname}/profile", changeUserInfo).Methods("POST")
+	//r.HandleFunc("/api/forum/{slug}/details", getForumInfo).Methods("GET")
+	//r.HandleFunc("/api/forum/{slug}/threads", getThreadsInfo).Methods("GET")
+	//r.HandleFunc("/api/thread/{slug_or_id}/details", getThreadInfo).Methods("GET")
+	//r.HandleFunc("/api/thread/{slug_or_id}/posts", getThreadPosts).Methods("GET")
+	//r.HandleFunc("/api/thread/{slug_or_id}/details", changeThreadInfo).Methods("POST")
+	//r.HandleFunc("/api/forum/{slug}/users", getForumUsers).Methods("GET")
+	//r.HandleFunc("/api/post/{id}/details", getPostInfo).Methods("GET")
+	//r.HandleFunc("/api/post/{id}/details", changePostMessage).Methods("POST")
+	//r.HandleFunc("/api/service/status", getServiceStatus).Methods("GET")
+
+	//err := http.ListenAndServe(":5000", r)
+	//if err != nil {
+	//	panic(err)
+	//}
 }
 
-func dbClearAll(w http.ResponseWriter, r *http.Request)  {
+var (
+	strContentType = []byte("Content-Type")
+	strApplicationJSON = []byte("application/json")
+)
+
+func dbClearAll(ctx *fasthttp.RequestCtx)  {
 	path := filepath.Join("script.sql")
 	c, _ := ioutil.ReadFile(path)
 	scriptString := string(c)
 	DB.Exec(context.Background(), scriptString)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
 }
 
 type User struct {
@@ -76,11 +99,10 @@ type User struct {
 	Email string `json:"email"`
 }
 
-func createUser(w http.ResponseWriter, r *http.Request) {
+func createUser(ctx *fasthttp.RequestCtx) {
 	var user User
-	vars := mux.Vars(r)
-	user.Nickname = vars["nickname"]
-	json.NewDecoder(r.Body).Decode(&user)
+	user.Nickname = ctx.UserValue("nickname").(string)
+	json.Unmarshal(ctx.PostBody(), &user)
 
 	_, err := DB.Exec(context.Background(), `INSERT INTO users(nickname, fullname, about, email) VALUES ($1, $2, $3, $4)`, user.Nickname, user.Fullname, user.About, user.Email)
 
@@ -97,19 +119,17 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 					res.Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
 					users = append(users, user)
 				}
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(users)
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusConflict)
+				json.NewEncoder(ctx).Encode(users)
 				return
 			}
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(user); err != nil {
-		panic(err)
-	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusCreated)
+	json.NewEncoder(ctx).Encode(user)
 }
 
 type Forum struct {
@@ -124,9 +144,9 @@ type ErrorMsg struct {
 	Message string `json:"message"`
 }
 
-func createForum(w http.ResponseWriter, r *http.Request) {
+func createForum(ctx *fasthttp.RequestCtx) {
 	var forum Forum
-	json.NewDecoder(r.Body).Decode(&forum)
+	json.Unmarshal(ctx.PostBody(), &forum)
 
 	_, err := DB.Exec(context.Background(), `INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3)`, forum.Title, forum.User, forum.Slug)
 
@@ -135,32 +155,39 @@ func createForum(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == "23505" {
 				DB.QueryRow(context.Background(), `SELECT title, "user", slug, posts, threads FROM forums WHERE slug=$1`, forum.Slug).Scan(&forum.Title, &forum.User,  &forum.Slug, &forum.Posts, &forum.Threads)
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusConflict)
-				if err := json.NewEncoder(w).Encode(forum); err != nil {
-					panic(err)
-				}
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusConflict)
+				json.NewEncoder(ctx).Encode(forum)
 				return
+				//w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+				//w.WriteHeader(http.StatusConflict)
+				//if err := json.NewEncoder(w).Encode(forum); err != nil {
+				//	panic(err)
+				//}
+				//return
 			} else if pgErr.Code == "23503" {
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusNotFound)
-				if err := json.NewEncoder(w).Encode(ErrorMsg{
-					"Can't find user with nickname " + forum.User,
-				}); err != nil {
-					panic(err)
-				}
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusNotFound)
+				json.NewEncoder(ctx).Encode(forum)
 				return
+				//w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+				//w.WriteHeader(http.StatusNotFound)
+				//if err := json.NewEncoder(w).Encode(ErrorMsg{
+				//	"Can't find user with nickname " + forum.User,
+				//}); err != nil {
+				//	panic(err)
+				//}
+				//return
 			}
 		}
 	}
 
 
 	DB.QueryRow(context.Background(), `SELECT nickname FROM users WHERE nickname=$1`, forum.User).Scan(&forum.User)
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(forum); err != nil {
-		panic(err)
-	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusCreated)
+	json.NewEncoder(ctx).Encode(forum)
+	return
 }
 
 type Thread struct {
@@ -174,19 +201,17 @@ type Thread struct {
 	Created time.Time `json:"created"`
 }
 
-func createThread(w http.ResponseWriter, r *http.Request) {
+func createThread(ctx *fasthttp.RequestCtx) {
 	var thread Thread
-	vars := mux.Vars(r)
-	thread.Forum = vars["slug"]
-	json.NewDecoder(r.Body).Decode(&thread)
+	thread.Forum = ctx.UserValue("slug").(string)
+	json.Unmarshal(ctx.PostBody(), &thread)
+
 	if thread.Slug != "" {
 		DB.QueryRow(context.Background(), `SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE slug=$1`, thread.Slug).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 		if thread.ID != 0 {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(thread); err != nil {
-				panic(err)
-			}
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(thread)
 			return
 		}
 	}
@@ -196,34 +221,29 @@ func createThread(w http.ResponseWriter, r *http.Request) {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == "23503" {
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusNotFound)
-				if err := json.NewEncoder(w).Encode(ErrorMsg{
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusNotFound)
+				json.NewEncoder(ctx).Encode(ErrorMsg{
 					"Author or forum slug doesnt exists",
-				}); err != nil {
-					panic(err)
-				}
+				})
 				return
 			} else if pgErr.Code == "23505" {
 				DB.QueryRow(context.Background(), `SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusConflict)
-				if err := json.NewEncoder(w).Encode(thread); err != nil {
-					panic(err)
-				}
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusConflict)
+				json.NewEncoder(ctx).Encode(thread)
 				return
 			}
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusCreated)
 	DB.QueryRow(context.Background(), `SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum=$1 AND author=$2 AND title=$3`, thread.Forum, thread.Author, thread.Title).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT slug FROM forums WHERE slug='%s'", thread.Forum)).Scan(&thread.Forum)
 
-	if err := json.NewEncoder(w).Encode(thread); err != nil {
-		panic(err)
-	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusCreated)
+	json.NewEncoder(ctx).Encode(thread)
+	return
 }
 
 type Vote struct {
@@ -233,11 +253,11 @@ type Vote struct {
 }
 
 const alpha = "abcdefghijklmnopqrstuvwxyz"
-func voteThread (w http.ResponseWriter, r *http.Request) {
+func voteThread (ctx *fasthttp.RequestCtx) {
 	var vote Vote
-	json.NewDecoder(r.Body).Decode(&vote)
-	vars := mux.Vars(r)
-	slugOrId, _ := vars["slug_or_id"]
+	slugOrId := ctx.UserValue("slug_or_id").(string)
+	json.Unmarshal(ctx.PostBody(), &vote)
+
 	if strings.ContainsAny(slugOrId, alpha) {
 		DB.QueryRow(context.Background(), `SELECT id FROM threads WHERE slug=$1`, slugOrId).Scan(&vote.ThreadID)
 	} else {
@@ -250,26 +270,23 @@ func voteThread (w http.ResponseWriter, r *http.Request) {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == "23503" {
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusNotFound)
-				if err := json.NewEncoder(w).Encode(ErrorMsg{
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusNotFound)
+				json.NewEncoder(ctx).Encode(ErrorMsg{
 					"cant find thread!",
-				}); err != nil {
-					panic(err)
-				}
+				})
 				return
 			} else if pgErr.Code == "23505" {
 				DB.Exec(context.Background(), `UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
+
 	var thread Thread
 	DB.QueryRow(context.Background(), `SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=$1`, vote.ThreadID).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
-	if err := json.NewEncoder(w).Encode(thread); err != nil {
-		panic(err)
-	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(thread)
 }
 
 type Post struct {
@@ -283,30 +300,26 @@ type Post struct {
 	Created time.Time `json:"created"`
 }
 
-func createPost (w http.ResponseWriter, r *http.Request) {
+func createPost (ctx *fasthttp.RequestCtx) {
 	var posts[] Post
-	vars := mux.Vars(r)
-	threadSlugOrId, _ := vars["slug_or_id"]
+	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 	threadSlugOrIdConverted, _ := strconv.Atoi(threadSlugOrId)
-	json.NewDecoder(r.Body).Decode(&posts)
+	json.Unmarshal(ctx.PostBody(), &posts)
 	threadID, forumSlug := -1, ""
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
 	if threadID == -1 || forumSlug == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		if err := json.NewEncoder(w).Encode(ErrorMsg{
+
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"cant find thread!",
-		}); err != nil {
-			panic(err)
-		}
+		})
 		return
 	}
 	if len(posts) == 0 {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(posts); err != nil {
-			panic(err)
-		}
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusCreated)
+		json.NewEncoder(ctx).Encode(posts)
 		return
 	}
 
@@ -319,20 +332,18 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 		).Scan(&pThread)
 
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			if err = json.NewEncoder(w).Encode(ErrorMsg{
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
 				"cant find thread!",
-			}); err != nil {
-				panic(err)
-			}
+			})
 			return
 		}
 
 		if pThread != threadID {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(ErrorMsg{
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
 				"Parent post was created in another thread!",
 			})
 			return
@@ -365,70 +376,53 @@ func createPost (w http.ResponseWriter, r *http.Request) {
 	res, _ := DB.Query(context.Background(), fmt.Sprintf("INSERT INTO posts(parent, author, message, thread, forum) VALUES %s RETURNING id, created;", resultQueryValueString))
 
 	defer res.Close()
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	var err error
 	for index, _ := range posts {
 		res.Next()
 		err = res.Scan(&posts[index].ID, &posts[index].Created)
 	}
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		if err := json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"cant find something!",
-		}); err != nil {
-			panic(err)
-		}
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(posts); err != nil {
-		panic(err)
-	}
-}
-
-func getUserInfo (w http.ResponseWriter, r *http.Request) {
-	var user User
-	vars := mux.Vars(r)
-	nickname, _ := vars["nickname"]
-
-	DB.QueryRow(context.Background(), `SELECT nickname, fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
-	if user.Nickname == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
-			"Error",
 		})
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(user)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusCreated)
+	json.NewEncoder(ctx).Encode(posts)
+	return
 }
 
-func changeUserInfo (w http.ResponseWriter, r *http.Request) {
+func getUserInfo (ctx *fasthttp.RequestCtx) {
 	var user User
-	vars := mux.Vars(r)
-	json.NewDecoder(r.Body).Decode(&user)
-	nickname, _ := vars["nickname"]
+	nickname := ctx.UserValue("nickname").(string)
+
+	DB.QueryRow(context.Background(), `SELECT nickname, fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Nickname, &user.Fullname, &user.About, &user.Email)
+	if user.Nickname == "" {
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{"User not found"})
+		return
+	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(user)
+}
+
+func changeUserInfo (ctx *fasthttp.RequestCtx) {
+	var user User
+	nickname := ctx.UserValue("nickname").(string)
+	json.Unmarshal(ctx.PostBody(), &user)
 
 	if user == (User{}) {
-
-		/* err := */ DB.QueryRow(context.Background(), `SELECT fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Fullname, &user.About, &user.Email)
-		//if _, ok := err.(*pq.Error); ok {
-		//	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		//	w.WriteHeader(http.StatusNotFound)
-		//	if err := json.NewEncoder(w).Encode(ErrorMsg{
-		//		"User not found!",
-		//	}); err != nil {
-		//		panic(err)
-		//	}
-		//	return
-		//}
+		DB.QueryRow(context.Background(), `SELECT fullname, about, email FROM users WHERE nickname=$1`, nickname).Scan(&user.Fullname, &user.About, &user.Email)
 		user.Nickname = nickname
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(user)
+
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusOK)
+		json.NewEncoder(ctx).Encode(user)
 		return
 	}
 	setQuery := ""
@@ -451,79 +445,67 @@ func changeUserInfo (w http.ResponseWriter, r *http.Request) {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			if pgErr.Code == "23505" {
-				w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-				w.WriteHeader(http.StatusConflict)
-				if err := json.NewEncoder(w).Encode(ErrorMsg{
-					"Conflict with other user!",
-				}); err != nil {
-					panic(err)
-				}
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusConflict)
+				json.NewEncoder(ctx).Encode(ErrorMsg{"Conflict with other user"})
 				return
 			}
 		}
 	}
 	if updatedUser == (User{}) {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		if err := json.NewEncoder(w).Encode(ErrorMsg{
-			"User not found!",
-		}); err != nil {
-			panic(err)
-		}
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{"User not found"})
 		return
 	}
 	updatedUser.Nickname = nickname
 
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	updatedUser.Nickname = nickname
-
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(updatedUser)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(updatedUser)
+	return
 }
 
-func getForumInfo (w http.ResponseWriter, r *http.Request) {
+func getForumInfo (ctx *fasthttp.RequestCtx) {
 	var forum Forum
-	vars := mux.Vars(r)
-	slug, _ := vars["slug"]
+	slug := ctx.UserValue("slug").(string)
 
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT title, \"user\", slug, posts, threads FROM forums WHERE slug='%s'", slug)).Scan(&forum.Title, &forum.User, &forum.Slug, &forum.Posts, &forum.Threads)
 	if (Forum{}) == forum {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum not found!",
 		})
 		return
 	}
 
 	DB.QueryRow(context.Background(), `SELECT nickname FROM users WHERE nickname=$1`, forum.User).Scan(&forum.User)
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(forum)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(forum)
+	return
 
 }
 
-func getThreadsInfo (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	forumSlug, _ := vars["slug"]
+func getThreadsInfo (ctx *fasthttp.RequestCtx) {
+	forumSlug := ctx.UserValue("slug").(string)
 
 	err := DB.QueryRow(context.Background(), `SELECT slug FROM forums WHERE slug=$1`, forumSlug).Scan(&forumSlug)
 	if err != nil || forumSlug == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
 	}
 
-	v := r.URL.Query()
-	limit := v.Get("limit")
-	since := v.Get("since")
+	limit := string(ctx.QueryArgs().Peek("limit"))
+	since := string(ctx.QueryArgs().Peek("since"))
 	since = strings.Replace(since, "T", " ", -1)
-	desc, _ := strconv.ParseBool(v.Get("desc"))
+	desc, _ := strconv.ParseBool(string(ctx.QueryArgs().Peek("desc")))
 
 	query := fmt.Sprintf("SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE forum='%s' ", forumSlug)
 	if since != "" {
@@ -549,9 +531,9 @@ func getThreadsInfo (w http.ResponseWriter, r *http.Request) {
 
 	res, _ := DB.Query(context.Background(), query)
 	if res == nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -566,15 +548,15 @@ func getThreadsInfo (w http.ResponseWriter, r *http.Request) {
 		threads = append(threads, thread)
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(threads)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(threads)
+	return
 }
 
 
-func getThreadInfo (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	threadSlugOrId, _ := vars["slug_or_id"]
+func getThreadInfo (ctx *fasthttp.RequestCtx) {
+	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 
 	var thread Thread
 	DB.QueryRow(context.Background(), `SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
@@ -584,33 +566,30 @@ func getThreadInfo (w http.ResponseWriter, r *http.Request) {
 	}
 
 	if thread.Author == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"thread is not in system!",
 		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(thread); err != nil {
-		panic(err)
-	}
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(thread)
+	return
 }
 
-func getThreadPosts (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	threadSlugOrId, _ := vars["slug_or_id"]
-	v := r.URL.Query()
-	limitParam := v.Get("limit")
+func getThreadPosts (ctx *fasthttp.RequestCtx) {
+	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
+	limitParam := string(ctx.QueryArgs().Peek("limit"))
 	if limitParam == "" {
 		limitParam = "100"
 	}
-	sinceParam := v.Get("since")
+	sinceParam := string(ctx.QueryArgs().Peek("since"))
 	sinceParam = strings.Replace(sinceParam, "T", " ", -1)
-	sortParam := v.Get("sort")
-	descParam, _ := strconv.ParseBool(v.Get("desc"))
+	sortParam := string(ctx.QueryArgs().Peek("sort"))
+	descParam, _ := strconv.ParseBool(string(ctx.QueryArgs().Peek("desc")))
 	threadID := 0
 
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE slug='%s'", threadSlugOrId)).Scan(&threadID)
@@ -619,9 +598,9 @@ func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 		DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE id=%d", id)).Scan(&threadID)
 	}
 	if threadID == 0 {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -664,9 +643,9 @@ func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 
 	res, _ := DB.Query(context.Background(), query)
 	if res == nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -680,17 +659,17 @@ func getThreadPosts (w http.ResponseWriter, r *http.Request) {
 		posts = append(posts, post)
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(posts)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(posts)
+	return
 }
 
-func changeThreadInfo (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	threadSlugOrId, _ := vars["slug_or_id"]
+func changeThreadInfo (ctx *fasthttp.RequestCtx) {
+	threadSlugOrId, _ := ctx.UserValue("slug_or_id").(string)
 	threadID := 0
 	var thread Thread
-	json.NewDecoder(r.Body).Decode(&thread)
+	json.Unmarshal(ctx.PostBody(), &thread)
 
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE slug='%s'", threadSlugOrId)).Scan(&threadID)
 	if threadID == 0 {
@@ -698,9 +677,9 @@ func changeThreadInfo (w http.ResponseWriter, r *http.Request) {
 		DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id FROM threads WHERE id=%d", id)).Scan(&threadID)
 	}
 	if threadID == 0 {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -715,34 +694,31 @@ func changeThreadInfo (w http.ResponseWriter, r *http.Request) {
 	}
 	setter = strings.TrimRight(setter, ",")
 
-	//fmt.Printf("UPDATE threads SET %s WHERE id=%d", setter, threadID)
 	DB.Exec(context.Background(), fmt.Sprintf("UPDATE threads SET %s WHERE id=%d", setter, threadID))
-	//fmt.Printf("SELECT title, author, forum, message, votes, slug, created FROM threads WHERE id=%d", threadID)
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=%d", threadID)).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(thread)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(thread)
+	return
 }
 
-func getForumUsers (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	forumSlug, _ := vars["slug"]
+func getForumUsers (ctx *fasthttp.RequestCtx) {
+	forumSlug := ctx.UserValue("slug").(string)
 
 	slug := ""
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT slug FROM forums WHERE slug='%s'", forumSlug)).Scan(&slug)
 	if slug == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
 	}
 
-	v := r.URL.Query()
-	limit := v.Get("limit")
-	since := v.Get("since")
-	desc, _ := strconv.ParseBool(v.Get("desc"))
+	limit := string(ctx.QueryArgs().Peek("limit"))
+	since := string(ctx.QueryArgs().Peek("since"))
+	desc, _ := strconv.ParseBool(string(ctx.QueryArgs().Peek("desc")))
 	query := fmt.Sprintf("SELECT nickname, fullname, about, email FROM usersonforums WHERE slug='%s' ", forumSlug)
 	if since != "" {
 		sign := ">"
@@ -764,9 +740,9 @@ func getForumUsers (w http.ResponseWriter, r *http.Request) {
 
 	res, _ := DB.Query(context.Background(), query)
 	if res == nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -780,21 +756,21 @@ func getForumUsers (w http.ResponseWriter, r *http.Request) {
 		users = append(users, user)
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(users)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(users)
+	return
 }
 
-func getPostInfo (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	postID, _ := strconv.Atoi(vars["id"])
+func getPostInfo (ctx *fasthttp.RequestCtx) {
+	postID, _ := strconv.Atoi(ctx.UserValue("id").(string))
 
 	var post Post
 	DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE id=%d", postID)).Scan(&post.ID, &post.Parent, &post.Author, &post.Message, &post.IsEdited, &post.Forum, &post.Thread, &post.Created)
 	if post.ID == 0 {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"forum is not in system!",
 		})
 		return
@@ -803,8 +779,7 @@ func getPostInfo (w http.ResponseWriter, r *http.Request) {
 	jsonAnswer := make(map[string]interface{}, 0)
 	jsonAnswer["post"] = post
 
-	v := r.URL.Query()
-	related := v.Get("related")
+	related := string(ctx.QueryArgs().Peek("related"))
 
 	if strings.Contains(related, "user") {
 		var user User
@@ -822,16 +797,16 @@ func getPostInfo (w http.ResponseWriter, r *http.Request) {
 		jsonAnswer["forum"] = forum
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(jsonAnswer)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(jsonAnswer)
+	return
 }
 
-func changePostMessage (w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	postID, _ := strconv.Atoi(vars["id"])
+func changePostMessage (ctx *fasthttp.RequestCtx) {
+	postID, _ := strconv.Atoi(ctx.UserValue("id").(string))
 	var newPost Post
-	json.NewDecoder(r.Body).Decode(&newPost)
+	json.Unmarshal(ctx.PostBody(), &newPost)
 
 	setQuery := ""
 	if newPost.Message != "" {
@@ -846,9 +821,9 @@ func changePostMessage (w http.ResponseWriter, r *http.Request) {
 		if thread == newPost.Thread {
 			setQuery += fmt.Sprintf(" parent = %d,", newPost.Parent)
 		} else {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(ErrorMsg{
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
 				"Parent post was created in another thread!",
 			})
 			return
@@ -865,17 +840,17 @@ func changePostMessage (w http.ResponseWriter, r *http.Request) {
 		err = DB.QueryRow(context.Background(), fmt.Sprintf("SELECT id, parent, author, message, isedited, forum, thread, created FROM posts WHERE id=%d", postID)).Scan(&newPost.ID, &newPost.Parent, &newPost.Author, &newPost.Message, &newPost.IsEdited, &newPost.Forum, &newPost.Thread, &newPost.Created)
 	}
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(ErrorMsg{
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"post is not in system!",
 		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(newPost)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(newPost)
 	return
 }
 
@@ -886,7 +861,7 @@ type Service struct {
 	Post int64 `json:"post"`
 
 }
-func getServiceStatus  (w http.ResponseWriter, r *http.Request) {
+func getServiceStatus(ctx *fasthttp.RequestCtx) {
 	var service Service
 
 	DB.QueryRow(context.Background(), "SELECT COUNT(*) FROM forums").Scan(&service.Forum)
@@ -894,7 +869,7 @@ func getServiceStatus  (w http.ResponseWriter, r *http.Request) {
 	DB.QueryRow(context.Background(), "SELECT COUNT(*) FROM users").Scan(&service.User)
 	DB.QueryRow(context.Background(), "SELECT COUNT(*) FROM posts").Scan(&service.Post)
 
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(service)
+	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	ctx.Response.SetStatusCode(http.StatusOK)
+	json.NewEncoder(ctx).Encode(service)
 }
