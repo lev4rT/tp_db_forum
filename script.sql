@@ -217,7 +217,6 @@ CREATE UNLOGGED TABLE usersOnForums (
 
 DROP INDEX IF EXISTS usersOnForumsNicknameSlug;
 CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(slug, nickname);
-CLUSTER usersOnForums using usersOnForumsNicknameSlug;
 
 ANALYZE users;
 ANALYZE forums;
