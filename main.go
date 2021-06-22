@@ -719,28 +719,50 @@ func getForumUsers (ctx *fasthttp.RequestCtx) {
 	}
 
 	limit := string(ctx.QueryArgs().Peek("limit"))
-	since := string(ctx.QueryArgs().Peek("since"))
-	desc, _ := strconv.ParseBool(string(ctx.QueryArgs().Peek("desc")))
-	query := fmt.Sprintf("SELECT nickname, fullname, about, email FROM usersonforums WHERE slug='%s' ", forumSlug)
-	if since != "" {
-		sign := ">"
-		if desc {
-			sign = "<"
-		}
-		query += fmt.Sprintf("AND nickname %s '%s' COLLATE \"C\" ", sign, since)
-	}
-	order := " ASC "
-	if desc {
-		order = " DESC "
-	}
-	query += fmt.Sprintf(" ORDER BY nickname COLLATE \"C\" %s ", order)
-
 	if limit == "" {
 		limit = "100"
 	}
-	query += fmt.Sprintf(" LIMIT %s ", limit)
+	since := string(ctx.QueryArgs().Peek("since"))
+	desc, _ := strconv.ParseBool(string(ctx.QueryArgs().Peek("desc")))
+	var orderSort, orderCompare string
+	if desc {
+		orderSort = " DESC "
+		orderCompare = " < "
+	} else {
+		orderSort = " ASC "
+		orderCompare = " > "
+	}
 
-	res, _ := transactionConnection.Query(query)
+	var res *pgx.Rows
+	if since == "" {
+		res, _ = DB.Query(
+			"SELECT u.nickname, u.fullname, u.about, u.email FROM users u JOIN usersonforums uof ON (u.nickname = uof.nickname AND uof.slug = $1) ORDER BY u.nickname COLLATE \"C\" "+orderSort+" LIMIT $2", slug, limit,
+		)
+	} else {
+		res, _ = DB.Query(
+			"SELECT u.nickname, u.fullname, u.about, u.email FROM users u JOIN usersonforums uof ON (u.nickname = uof.nickname AND uof.slug = $1) WHERE (u.nickname "+orderCompare+" $2 COLLATE \"C\") ORDER BY u.nickname COLLATE \"C\" "+orderSort+ " LIMIT $3", slug, since, limit,
+		)
+	}
+	//query := fmt.Sprintf("SELECT nickname, fullname, about, email FROM usersonforums WHERE slug='%s' ", forumSlug)
+	//if since != "" {
+	//	sign := ">"
+	//	if desc {
+	//		sign = "<"
+	//	}
+	//	query += fmt.Sprintf("AND nickname %s '%s' COLLATE \"C\" ", sign, since)
+	//}
+	//order := " ASC "
+	//if desc {
+	//	order = " DESC "
+	//}
+	//query += fmt.Sprintf(" ORDER BY nickname COLLATE \"C\" %s ", order)
+	//
+	//if limit == "" {
+	//	limit = "100"
+	//}
+	//query += fmt.Sprintf(" LIMIT %s ", limit)
+
+	//res, _ := transactionConnection.Query(query)
 	if res == nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
