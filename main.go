@@ -293,7 +293,7 @@ type Post struct {
 }
 
 func createPost (ctx *fasthttp.RequestCtx) {
-	posts := make([]Post, 0)
+	var posts []Post
 	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 	threadSlugOrIdConverted, convertErr := strconv.Atoi(threadSlugOrId)
 	json.Unmarshal(ctx.PostBody(), &posts)
@@ -329,16 +329,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	if posts[0].Parent != 0 {
 		var pThread int
-		err = transactionConnection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
-
-		if err != nil {
-			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-			ctx.Response.SetStatusCode(http.StatusConflict)
-			json.NewEncoder(ctx).Encode(ErrorMsg{
-				"cant find thread!",
-			})
-			return
-		}
+		transactionConnection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
 
 		if pThread != threadID {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -353,21 +344,25 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	timeOfCreation := strfmt.DateTime(time.Now())
 	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum, created) VALUES `
-	queryArguments := make([]interface{}, len(posts)*6)
-	//var queryArguments []interface{}
+	var queryArguments []interface{}
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
+		err = transactionConnection.QueryRow(`SELECT nickname FROM users WHERE nickname = $1`, posts[index].Author).Scan(&posts[index].Author)
+		if err != nil {
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusNotFound)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
+				"User not found!",
+			})
+			return
+		}
+
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
 		posts[index].Created = timeOfCreation
 
 		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d),", index*6+1, index*6+2, index*6+3, index*6+4, index*6+5, index*6+6)
-		queryArguments [index*6] = posts[index].Parent
-		queryArguments [index*6 + 1] = posts[index].Author
-		queryArguments [index*6 + 2] = posts[index].Message
-		queryArguments [index*6 + 3] = posts[index].Thread
-		queryArguments [index*6 + 4] = posts[index].Forum
-		queryArguments [index*6 + 5] = posts[index].Created
+		queryArguments = append(queryArguments, posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum, posts[index].Created)
 
 	}
 	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id;"
