@@ -8,10 +8,8 @@ import (
 	_ "github.com/jackc/pgconn"
 	"github.com/jackc/pgx"
 	"github.com/valyala/fasthttp"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,11 +31,11 @@ func main() {
 		panic(err)
 	}
 	defer DB.Close()
-
-	path := filepath.Join("script.sql")
-	c, _ := ioutil.ReadFile(path)
-	scriptString := string(c)
-	DB.Exec(scriptString)
+	//
+	//path := filepath.Join("script.sql")
+	//c, _ := ioutil.ReadFile(path)
+	//scriptString := string(c)
+	//DB.Exec(scriptString)
 
 
 	r := router.New()
@@ -282,8 +280,17 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	threadSlugOrIdConverted, _ := strconv.Atoi(threadSlugOrId)
 	json.Unmarshal(ctx.PostBody(), &posts)
 	threadID, forumSlug := -1, ""
-	DB.QueryRow(fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
+	transactionConnection, err := DB.Begin()
+	if err != nil {
+		fmt.Println(err)
+	}
+	// Rollback is safe to call even if the tx is already closed, so if
+	// the tx commits successfully, this is a no-op
+	defer transactionConnection.Rollback()
+
+	transactionConnection.QueryRow(fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
 	if threadID == -1 || forumSlug == "" {
+		transactionConnection.Rollback()
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
 		json.NewEncoder(ctx).Encode(ErrorMsg{
@@ -301,7 +308,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	if posts[0].Parent != 0 {
 		var pThread int
-		err := DB.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
+		err = transactionConnection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
 
 		if err != nil {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -345,16 +352,15 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id;"
 
 	//start := time.Now()
-	res, _ := DB.Query(resultQueryString, queryArguments...)
+	res, _ := transactionConnection.Query(resultQueryString, queryArguments...)
 	//fmt.Printf("Query time: %s\n", time.Since(start))
 
-	defer res.Close()
-	var err error
 	for index, _ := range posts {
 		res.Next()
 		err = res.Scan(&posts[index].ID)
 	}
 	if err != nil {
+		res.Close()
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
 		json.NewEncoder(ctx).Encode(ErrorMsg{
@@ -363,6 +369,11 @@ func createPost (ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	res.Close()
+	err = transactionConnection.Commit()
+	if err != nil {
+		fmt.Println(err)
+	}
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusCreated)
 	json.NewEncoder(ctx).Encode(posts)
