@@ -24,9 +24,6 @@ CREATE UNLOGGED TABLE forums (
 DROP INDEX IF EXISTS forumsSlug;
 CREATE INDEX forumsSlug ON forums(slug);
 
-DROP INDEX IF EXISTS forumsSlug;
-CREATE INDEX forumsSlug ON forums(slug);
-
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE UNLOGGED TABLE threads (
                          id SERIAL NOT NULL PRIMARY KEY,  -- Идентификатор ветки обсуждения.
@@ -42,7 +39,7 @@ DROP INDEX IF EXISTS threadsForum;
 CREATE INDEX threadsForum ON threads(forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE INDEX threadsSlug ON threads(slug);
+CREATE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;;
 
 
 ------------------------------------------------------------------------
@@ -84,13 +81,13 @@ CREATE UNLOGGED TABLE posts (
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
 DROP INDEX IF EXISTS postsThreadID;
-CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
+-- CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
 
 DROP INDEX IF EXISTS postsPathID;
-CREATE INDEX IF NOT EXISTS postsPathID ON posts (path, id);
+-- CREATE INDEX IF NOT EXISTS postsPathID ON posts (path, id);
 
 DROP INDEX IF EXISTS postsThreadPathID;
-CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
+-- CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
 -- --
 -- DROP INDEX IF EXISTS postsPath1DescID;
 -- CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]) DESC, id);
@@ -175,11 +172,10 @@ DROP TABLE IF EXISTS votes CASCADE;
 CREATE UNLOGGED TABLE votes(
                       nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Идентификатор пользователя.
                       voice SMALLINT,  -- Отданный голос.
-                      threadID INT REFERENCES threads(id),  -- ID  треда
-
-                      CONSTRAINT uniqueVote UNIQUE (nickname, threadID)
+                      threadID INT REFERENCES threads(id)  -- ID  треда
 );
--- CREATE UNIQUE INDEX OF NOT EXISTS votesNicknameThreadID ON votes(nickname, threadID)
+DROP INDEX IF EXISTS votesNicknameThreadID;
+CREATE UNIQUE INDEX votesNicknameThreadID ON votes(nickname, threadID);
 
 CREATE OR REPLACE FUNCTION addVoteForThread() RETURNS TRIGGER AS
 $$
