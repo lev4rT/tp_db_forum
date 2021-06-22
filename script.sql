@@ -8,10 +8,10 @@ CREATE UNLOGGED TABLE users (
                        email CITEXT NOT NULL UNIQUE -- Почтовый адрес пользователя (уникальное поле).
 );
 DROP INDEX IF EXISTS usersNickname;
-CREATE INDEX IF NOT EXISTS usersNickname ON users USING HASH (nickname);
+-- CREATE INDEX IF NOT EXISTS usersNickname ON users USING HASH (nickname);
 
 DROP INDEX IF EXISTS usersEmail;
-CREATE INDEX IF NOT EXISTS usersEmail ON users USING HASH (email);
+-- CREATE INDEX IF NOT EXISTS usersEmail ON users USING HASH (email);
 
 DROP TABLE IF EXISTS forums CASCADE;
 CREATE UNLOGGED TABLE forums (
@@ -22,10 +22,10 @@ CREATE UNLOGGED TABLE forums (
                         threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
 DROP INDEX IF EXISTS forumsSlug;
-CREATE INDEX forumsSlug ON forums USING HASH (slug);
+-- CREATE INDEX forumsSlug ON forums USING HASH (slug);
 
 DROP INDEX IF EXISTS forumsUser;
-CREATE INDEX forumsUser ON forums ("user");
+-- CREATE INDEX forumsUser ON forums ("user");
 
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE UNLOGGED TABLE threads (
@@ -39,10 +39,10 @@ CREATE UNLOGGED TABLE threads (
                          created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
 );
 DROP INDEX IF EXISTS threadsForum;
-CREATE INDEX IF NOT EXISTS threadsForum ON threads USING HASH (forum);
+-- CREATE INDEX IF NOT EXISTS threadsForum ON threads USING HASH (forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE INDEX IF NOT EXISTS threadsSlug ON threads USING HASH (slug);
+-- CREATE INDEX IF NOT EXISTS threadsSlug ON threads USING HASH (slug);
 
 ------------------------------------------------------------------------
 
@@ -83,16 +83,16 @@ CREATE UNLOGGED TABLE posts (
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
 DROP INDEX IF EXISTS postsThreadID;
-CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
+-- CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
 --
 DROP INDEX IF EXISTS postsPath1DescID;
-CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]) DESC, id);
+-- CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]) DESC, id);
 --
 DROP INDEX IF EXISTS postsThreadIDPath1Parent;
-CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
+-- CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
 --
 DROP INDEX IF EXISTS postsThreadPathID;
-CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
+-- CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
 
 
 ------------------------------------------------------------------------
