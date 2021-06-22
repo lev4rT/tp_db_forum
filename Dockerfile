@@ -59,5 +59,5 @@ COPY --from=build /opt/build/golang/ .
 # Запускаем PostgreSQL и сервер
 #
 #CMD service postgresql start && ./main
-
+ENV PGPASSWORD docker
 CMD service postgresql start &&  psql -h localhost -d docker -U docker -p 5432 -a -q -f ./script.sql && ./main
