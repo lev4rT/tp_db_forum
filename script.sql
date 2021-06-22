@@ -7,9 +7,6 @@ CREATE UNLOGGED TABLE users (
                        about TEXT,  -- Описание пользователя.
                        email CITEXT NOT NULL UNIQUE -- Почтовый адрес пользователя (уникальное поле).
 );
-DROP INDEX IF EXISTS usersNickname;
-CREATE INDEX usersNickname ON users(nickname);
-
 DROP INDEX IF EXISTS usersEmail;
 CREATE INDEX usersEmail ON users(email);
 
@@ -21,8 +18,6 @@ CREATE UNLOGGED TABLE forums (
                         posts BIGINT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
                         threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
-DROP INDEX IF EXISTS forumsSlug;
-CREATE INDEX forumsSlug ON forums(slug);
 
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE UNLOGGED TABLE threads (
@@ -101,25 +96,25 @@ DROP INDEX IF EXISTS postsThreadPathID;
 
 ------------------------------------------------------------------------
 
--- CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
--- $$
--- DECLARE
---     nicknameUser CITEXT;
---     fullnameUser TEXT;
---     aboutUser TEXT;
---     emailUser CITEXT;
--- BEGIN
---     UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
---     SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
---     INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
---     RETURN NEW;
--- END;
--- $$
--- LANGUAGE 'plpgsql';
---
--- CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
---     FOR EACH ROW
---     EXECUTE PROCEDURE appendPostsCounterForum();
+CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
+$$
+DECLARE
+    nicknameUser CITEXT;
+    fullnameUser TEXT;
+    aboutUser TEXT;
+    emailUser CITEXT;
+BEGIN
+    UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
+    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$
+LANGUAGE 'plpgsql';
+
+CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
+    FOR EACH ROW
+    EXECUTE PROCEDURE appendPostsCounterForum();
 
 ------------------------------------------------------------------------
 
@@ -137,9 +132,6 @@ BEGIN
         SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
         NEW.path = array_append(NEW.path, NEW.id);
     END IF;
-    UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
-    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
-    INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
     RETURN NEW;
 END;
 $$
@@ -219,9 +211,17 @@ CREATE UNLOGGED TABLE usersOnForums (
     fullname TEXT NOT NULL,  -- Полное имя пользователя.
     about TEXT,  -- Описание пользователя.
     email CITEXT NOT NULL,  -- Почтовый адрес пользователя (уникальное поле).
-    slug CITEXT NOT NULL REFERENCES forums(slug)  -- Человекопонятный URL. Уникальное поле.
+    slug CITEXT NOT NULL REFERENCES forums(slug),  -- Человекопонятный URL. Уникальное поле.
+    UNIQUE (nickname, slug)
 );
 
 DROP INDEX IF EXISTS usersOnForumsNicknameSlug;
 CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(slug, nickname);
 CLUSTER usersOnForums using usersOnForumsNicknameSlug;
+
+ANALYZE users;
+ANALYZE forums;
+ANALYZE threads;
+ANALYZE posts;
+ANALYZE votes;
+ANALYZE usersOnForums;
