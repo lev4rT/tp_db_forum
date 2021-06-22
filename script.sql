@@ -8,10 +8,10 @@ CREATE UNLOGGED TABLE users (
                        email CITEXT NOT NULL UNIQUE -- Почтовый адрес пользователя (уникальное поле).
 );
 DROP INDEX IF EXISTS usersNickname;
-CREATE INDEX usersNickname ON posts(nickname);
+CREATE INDEX usersNickname ON users(nickname);
 
 DROP INDEX IF EXISTS usersEmail;
-CREATE INDEX usersEmail ON posts(email);
+CREATE INDEX usersEmail ON users(email);
 
 DROP TABLE IF EXISTS forums CASCADE;
 CREATE UNLOGGED TABLE forums (
