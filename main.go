@@ -119,7 +119,7 @@ func createUser(ctx *fasthttp.RequestCtx) {
 
 	transactionConnection.Commit()
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-	ctx.Response.SetStatusCode(http.StatusCreated)
+	ctx.Response.SetStatusCode(http.StatusConflict)
 	json.NewEncoder(ctx).Encode(user)
 }
 
