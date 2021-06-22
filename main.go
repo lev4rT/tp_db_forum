@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/fasthttp/router"
+	"github.com/go-openapi/strfmt"
 	_ "github.com/jackc/pgconn"
 	"github.com/jackc/pgx"
 	"github.com/valyala/fasthttp"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +33,11 @@ func main() {
 		panic(err)
 	}
 	defer DB.Close()
+
+	path := filepath.Join("script.sql")
+	c, _ := ioutil.ReadFile(path)
+	scriptString := string(c)
+	DB.Exec(scriptString)
 
 
 	r := router.New()
@@ -174,7 +182,7 @@ type Thread struct {
 	Message string `json:"message"`
 	Votes int `json:"votes"`
 	Slug string `json:"slug"`
-	Created time.Time `json:"created"`
+	Created strfmt.DateTime `json:"created"`
 }
 
 func createThread(ctx *fasthttp.RequestCtx) {
@@ -265,7 +273,7 @@ type Post struct {
 	IsEdited bool `json:"isEdited"`
 	Forum string `json:"forum"`
 	Thread int `json:"thread"`
-	Created time.Time `json:"created"`
+	Created strfmt.DateTime `json:"created"`
 }
 
 func createPost (ctx *fasthttp.RequestCtx) {
@@ -293,9 +301,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	if posts[0].Parent != 0 {
 		var pThread int
-		err := DB.QueryRow("SELECT thread FROM posts WHERE id = $1",
-			posts[0].Parent,
-		).Scan(&pThread)
+		err := DB.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
 
 		if err != nil {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -317,17 +323,26 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	}
 
 
-	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum) VALUES `
-	var queryArguments []interface{}
+	timeOfCreation := strfmt.DateTime(time.Now())
+	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum, created) VALUES `
+	queryArguments := make([]interface{}, len(posts)*6)
+	//var queryArguments []interface{}
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
+		posts[index].Created = timeOfCreation
 
-		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d),", index*5+1, index*5+2, index*5+3, index*5+4, index*5+5)
-		queryArguments = append(queryArguments, posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum)
+		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d),", index*6+1, index*6+2, index*6+3, index*6+4, index*6+5, index*6+6)
+		queryArguments [index*6] = posts[index].Parent
+		queryArguments [index*6 + 1] = posts[index].Author
+		queryArguments [index*6 + 2] = posts[index].Message
+		queryArguments [index*6 + 3] = posts[index].Thread
+		queryArguments [index*6 + 4] = posts[index].Forum
+		queryArguments [index*6 + 5] = posts[index].Created
+
 	}
-	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id, created;"
+	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id;"
 
 	//start := time.Now()
 	res, _ := DB.Query(resultQueryString, queryArguments...)
@@ -337,7 +352,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	var err error
 	for index, _ := range posts {
 		res.Next()
-		err = res.Scan(&posts[index].ID, &posts[index].Created)
+		err = res.Scan(&posts[index].ID)
 	}
 	if err != nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -347,6 +362,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 		})
 		return
 	}
+
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusCreated)
 	json.NewEncoder(ctx).Encode(posts)

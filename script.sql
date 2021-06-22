@@ -78,7 +78,7 @@ CREATE UNLOGGED TABLE posts (
                        forum CITEXT, -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
                        thread INTEGER REFERENCES threads(id),  -- Идентификатор ветви (id) обсуждения данного сообещния.
                        created TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- Дата создания сообщения на форуме.
-                       path BIGINT[] DEFAULT '{}', -- Materialized Path. Используется для вложенных постов
+                       path BIGINT[] DEFAULT ARRAY []::INTEGER[], -- Materialized Path. Используется для вложенных постов
 
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
