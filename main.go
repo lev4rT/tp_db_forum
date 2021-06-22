@@ -7,10 +7,8 @@ import (
 	_ "github.com/jackc/pgconn"
 	"github.com/jackc/pgx"
 	"github.com/valyala/fasthttp"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -62,12 +60,14 @@ var (
 )
 
 func dbClearAll(ctx *fasthttp.RequestCtx)  {
-	path := filepath.Join("script.sql")
-	c, _ := ioutil.ReadFile(path)
-	scriptString := string(c)
-	_, err := DB.Exec(scriptString)
+	_, err := DB.Exec(`TRUNCATE users CASCADE;`)
+	_, err = DB.Exec(`TRUNCATE forums CASCADE;`)
+	_, err = DB.Exec(`TRUNCATE threads CASCADE;`)
+	_, err = DB.Exec(`TRUNCATE votes CASCADE;`)
+	_, err = DB.Exec(`TRUNCATE posts CASCADE;`)
 	if err != nil {
-		log.Fatal("Cant clear DB!")
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusInternalServerError)
 	}
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusOK)
@@ -226,17 +226,13 @@ type Vote struct {
 	ThreadID int `json:"thread_id"`
 }
 
-const alpha = "abcdefghijklmnopqrstuvwxyz"
 func voteThread (ctx *fasthttp.RequestCtx) {
 	var vote Vote
 	slugOrId := ctx.UserValue("slug_or_id").(string)
 	json.Unmarshal(ctx.PostBody(), &vote)
 
-	if strings.ContainsAny(slugOrId, alpha) {
-		DB.QueryRow(`SELECT id FROM threads WHERE slug=$1`, slugOrId).Scan(&vote.ThreadID)
-	} else {
-		vote.ThreadID, _ = strconv.Atoi(slugOrId)
-	}
+	slugOrIdConverted, _ := strconv.Atoi(slugOrId)
+	DB.QueryRow(`SELECT id FROM threads WHERE slug=$1 or id=$2`, slugOrId, slugOrIdConverted).Scan(&vote.ThreadID)
 
 	_, err := DB.Exec(`INSERT INTO votes(nickname, voice, threadID) VALUES ($1, $2, $3)`, vote.Nickname, vote.Voice, vote.ThreadID)
 
