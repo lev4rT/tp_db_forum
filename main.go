@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/fasthttp/router"
@@ -142,11 +143,19 @@ func createForum(ctx *fasthttp.RequestCtx) {
 	transactionConnection, _ := DB.Begin()
 	defer transactionConnection.Rollback()
 
-	_, err := transactionConnection.Exec(`INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3)`, forum.Title, forum.User, forum.Slug)
+	err := transactionConnection.QueryRow(`SELECT nickname FROM users WHERE nickname=$1`, forum.User).Scan(&forum.User)
+	if err !=nil {
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(forum)
+		return
+	}
+
+	_, err = transactionConnection.Exec(`INSERT INTO forums(title, "user", slug) VALUES ($1, $2, $3)`, forum.Title, forum.User, forum.Slug)
 
 	if err != nil {
 		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
-			DB.QueryRow(`SELECT title, "user", slug, posts, threads FROM forums WHERE slug=$1`, forum.Slug).Scan(&forum.Title, &forum.User,  &forum.Slug, &forum.Posts, &forum.Threads)
+			DB.QueryRow(`SELECT title, slug, posts, threads FROM forums WHERE slug=$1`, forum.Slug).Scan(&forum.Title,  &forum.Slug, &forum.Posts, &forum.Threads)
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 			ctx.Response.SetStatusCode(http.StatusConflict)
 			json.NewEncoder(ctx).Encode(forum)
@@ -161,7 +170,7 @@ func createForum(ctx *fasthttp.RequestCtx) {
 	}
 
 
-	transactionConnection.QueryRow(`SELECT nickname FROM users WHERE nickname=$1`, forum.User).Scan(&forum.User)
+
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusCreated)
 	json.NewEncoder(ctx).Encode(forum)
@@ -188,18 +197,23 @@ func createThread(ctx *fasthttp.RequestCtx) {
 
 	transactionConnection, _ := DB.Begin()
 	defer transactionConnection.Rollback()
+	threadSlug := sql.NullString{}
 	if thread.Slug != "" {
-		transactionConnection.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE slug=$1`, thread.Slug).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
-		if thread.ID != 0 {
-			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-			ctx.Response.SetStatusCode(http.StatusConflict)
-			json.NewEncoder(ctx).Encode(thread)
-			return
-		}
+		threadSlug.String = thread.Slug
+		threadSlug.Valid = true
 	}
 
-	_, err := transactionConnection.Exec(`INSERT INTO threads(title, author, forum, message, votes, slug, created) VALUES ($1, $2, $3, $4, $5, $6, $7)`, thread.Title, thread.Author, thread.Forum, thread.Message, thread.Votes, thread.Slug, thread.Created)
+	err := transactionConnection.QueryRow(`INSERT INTO threads(title, author, forum, message, votes, slug, created) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;`, thread.Title, thread.Author, thread.Forum, thread.Message, thread.Votes, threadSlug, thread.Created).Scan(&thread.ID)
 	if err != nil {
+		if thread.Slug != "" {
+			DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE slug=$1`, thread.Slug).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+			if thread.ID != 0 {
+				ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+				ctx.Response.SetStatusCode(http.StatusConflict)
+				json.NewEncoder(ctx).Encode(thread)
+				return
+			}
+		}
 		if errPg, _ := err.(pgx.PgError); errPg.Code == "23503" {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 			ctx.Response.SetStatusCode(http.StatusNotFound)
@@ -237,31 +251,29 @@ func voteThread (ctx *fasthttp.RequestCtx) {
 	var vote Vote
 	slugOrId := ctx.UserValue("slug_or_id").(string)
 	json.Unmarshal(ctx.PostBody(), &vote)
-	slugOrIdConverted, _ := strconv.Atoi(slugOrId)
+	slugOrIdConverted, err := strconv.Atoi(slugOrId)
 
-	transactionConnection, _ := DB.Begin()
-	defer transactionConnection.Rollback()
-	transactionConnection.QueryRow(`SELECT id FROM threads WHERE slug=$1 or id=$2`, slugOrId, slugOrIdConverted).Scan(&vote.ThreadID)
 
-	_, err := transactionConnection.Exec(`INSERT INTO votes(nickname, voice, threadID) VALUES ($1, $2, $3)`, vote.Nickname, vote.Voice, vote.ThreadID)
-
+	var insertErr error
+	var selectErr error
+	var thread Thread
 	if err != nil {
-		if errPg, _ := err.(pgx.PgError); errPg.Code == "23503" {
-			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-			ctx.Response.SetStatusCode(http.StatusNotFound)
-			json.NewEncoder(ctx).Encode(ErrorMsg{
-				"cant find thread!",
-			})
-			return
-		}
-		if errPg, _ := err.(pgx.PgError); errPg.Code == "23505" {
-			DB.Exec(`UPDATE votes SET voice = $1 WHERE "threadid" = $2 AND nickname = $3;`, vote.Voice, vote.ThreadID, vote.Nickname)
-		}
+		_, insertErr = DB.Exec("WITH threadInfo AS (SELECT id FROM threads WHERE slug = $3 ) INSERT INTO votes (voice, nickname, threadID) SELECT $1, $2, threadInfo.id FROM threadInfo ON CONFLICT (threadID, nickname) DO UPDATE SET voice = $1", vote.Voice, vote.Nickname, slugOrId)
+		selectErr = DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE slug=$1`, slugOrId).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+	} else if slugOrIdConverted >= 1 {
+		_, insertErr = DB.Exec("INSERT INTO votes (voice, nickname, threadID) VALUES ($1, $2, $3) ON CONFLICT (threadID, nickname) DO UPDATE SET voice = $1", vote.Voice, vote.Nickname, slugOrIdConverted)
+		selectErr = DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=$1`, slugOrIdConverted).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
 	}
 
-	transactionConnection.Commit()
-	var thread Thread
-	DB.QueryRow(`SELECT id, title, author, forum, message, votes, slug, created FROM threads WHERE id=$1`, vote.ThreadID).Scan(&thread.ID, &thread.Title, &thread.Author, &thread.Forum, &thread.Message, &thread.Votes, &thread.Slug, &thread.Created)
+	if insertErr != nil || selectErr != nil {
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusNotFound)
+		json.NewEncoder(ctx).Encode(ErrorMsg{
+			"cant find thread!",
+		})
+		return
+	}
+
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusOK)
 	json.NewEncoder(ctx).Encode(thread)

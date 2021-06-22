@@ -34,7 +34,7 @@ DROP INDEX IF EXISTS threadsForum;
 CREATE INDEX threadsForum ON threads(forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;;
+CREATE UNIQUE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;
 
 
 ------------------------------------------------------------------------
