@@ -279,27 +279,32 @@ type Post struct {
 }
 
 func createPost (ctx *fasthttp.RequestCtx) {
-	posts := make([]Post, 0)
 	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
-	threadSlugOrIdConverted, _ := strconv.Atoi(threadSlugOrId)
-	json.Unmarshal(ctx.PostBody(), &posts)
+	threadSlugOrIdConverted, convertErr := strconv.Atoi(threadSlugOrId)
 	threadID, forumSlug := -1, ""
-	transactionConnection, err := DB.Begin()
-	if err != nil {
-		fmt.Println(err)
-	}
-	// Rollback is safe to call even if the tx is already closed, so if
-	// the tx commits successfully, this is a no-op
-	defer transactionConnection.Rollback()
 
-	transactionConnection.QueryRow(fmt.Sprintf("SELECT id, forum FROM threads WHERE slug='%s' or id=%d", threadSlugOrId, threadSlugOrIdConverted)).Scan(&threadID, &forumSlug)
-	if threadID == -1 || forumSlug == "" {
-		transactionConnection.Rollback()
+	var err error
+	if convertErr != nil {
+		err = DB.QueryRow(`SELECT id, forum FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
+	} else {
+		err = DB.QueryRow(`SELECT id, forum FROM threads WHERE id=$1`, threadSlugOrIdConverted).Scan(&threadID, &forumSlug)
+	}
+	if err != nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
 		json.NewEncoder(ctx).Encode(ErrorMsg{
 			"cant find thread!",
 		})
+		return
+	}
+
+
+	posts := make([]Post, 0)
+	json.Unmarshal(ctx.PostBody(), &posts)
+	if len(posts) == 0 {
+		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+		ctx.Response.SetStatusCode(http.StatusCreated)
+		json.NewEncoder(ctx).Encode(posts)
 		return
 	}
 	if len(posts) == 0 {
@@ -312,7 +317,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 
 	if posts[0].Parent != 0 {
 		var pThread int
-		err = transactionConnection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
+		err = DB.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
 
 		if err != nil {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -356,7 +361,7 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id;"
 
 	//start := time.Now()
-	res, _ := transactionConnection.Query(resultQueryString, queryArguments...)
+	res, _ := DB.Query(resultQueryString, queryArguments...)
 	//fmt.Printf("Query time: %s\n", time.Since(start))
 
 	for index, _ := range posts {
@@ -377,7 +382,6 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusCreated)
 	json.NewEncoder(ctx).Encode(posts)
-	transactionConnection.Commit()
 	return
 }
 
