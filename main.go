@@ -9,8 +9,10 @@ import (
 	_ "github.com/jackc/pgconn"
 	"github.com/jackc/pgx"
 	"github.com/valyala/fasthttp"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,10 +38,10 @@ func main() {
 	}
 	defer handler.connection.Close()
 	//
-	//path := filepath.Join("script.sql")
-	//c, _ := ioutil.ReadFile(path)
-	//scriptString := string(c)
-	//handler.connection.Exec(scriptString)
+	path := filepath.Join("script.sql")
+	c, _ := ioutil.ReadFile(path)
+	scriptString := string(c)
+	handler.connection.Exec(scriptString)
 
 
 	r := router.New()

@@ -71,9 +71,9 @@ CREATE UNLOGGED TABLE posts (
                        forum CITEXT REFERENCES forums(slug), -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
                        thread INTEGER REFERENCES threads(id),  -- Идентификатор ветви (id) обсуждения данного сообещния.
                        created TIMESTAMP WITH TIME ZONE,  -- Дата создания сообщения на форуме.
-                       path INTEGER[], -- Materialized Path. Используется для вложенных постов
+                       path INTEGER[] -- Materialized Path. Используется для вложенных постов
 
-                       CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
+--                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
 
 DROP INDEX IF EXISTS postsThread;
@@ -129,7 +129,7 @@ BEGIN
         new.path := new.path || new.id;
     else
         select path, thread from posts where id = new.parent into parents, parentsThread;
-        if (coalesce(array_length(parents, 1), 0) = 0) then
+        if NOT FOUND then
             raise exception 'parents post does not exists' USING ERRCODE = '77777';
         end if;
         if parentsThread != new.thread then
