@@ -347,17 +347,22 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	timeOfCreation := strfmt.DateTime(time.Now())
 	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum, created) VALUES `
 	var queryArguments []interface{}
+	lastValidInsertIndex := len(posts) - 1
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
 		posts[index].Created = timeOfCreation
 
-		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d),", index*6+1, index*6+2, index*6+3, index*6+4, index*6+5, index*6+6)
+		resultQueryString += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)", index*6+1, index*6+2, index*6+3, index*6+4, index*6+5, index*6+6)
 		queryArguments = append(queryArguments, posts[index].Parent, posts[index].Author, posts[index].Message, posts[index].Thread, posts[index].Forum, posts[index].Created)
 
+		if index != lastValidInsertIndex {
+			resultQueryString += ", "
+		} else {
+			resultQueryString += " RETURNING id;"
+		}
 	}
-	resultQueryString = strings.TrimRight(resultQueryString, ",") + " RETURNING id;"
 
 	//start := time.Now()
 	res, _ := transactionConnection.Query(resultQueryString, queryArguments...)
