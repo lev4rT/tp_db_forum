@@ -75,23 +75,11 @@ CREATE UNLOGGED TABLE posts (
 
 --                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
-DROP INDEX IF EXISTS postsThreadID;
--- CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
-
-DROP INDEX IF EXISTS postsPathID;
--- CREATE INDEX IF NOT EXISTS postsPathID ON posts (path, id);
-
+DROP INDEX IF EXISTS postsPath1DescID;
+CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]), id);
+--
 DROP INDEX IF EXISTS postsThreadPathID;
--- CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
--- --
--- DROP INDEX IF EXISTS postsPath1DescID;
--- CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]) DESC, id);
--- --
--- DROP INDEX IF EXISTS postsThreadIDPath1Parent;
--- CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
--- --
--- DROP INDEX IF EXISTS postsThreadPathID;
--- CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
+CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
 
 
 ------------------------------------------------------------------------
