@@ -39,7 +39,7 @@ func main() {
 	//path := filepath.Join("script.sql")
 	//c, _ := ioutil.ReadFile(path)
 	//scriptString := string(c)
-	//DB.Exec(scriptString)
+	//handler.connection.Exec(scriptString)
 
 
 	r := router.New()
@@ -287,7 +287,7 @@ func (handler *postgresHandler) voteThread (ctx *fasthttp.RequestCtx) {
 
 type Post struct {
 	ID int64 `json:"id"`
-	Parent int64 `json:"parent"`
+	Parent *int64 `json:"parent"`
 	Author string `json:"author"`
 	Message string `json:"message"`
 	IsEdited bool `json:"isEdited"`
@@ -300,18 +300,12 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 	threadSlugOrIdConverted, convertErr := strconv.Atoi(threadSlugOrId)
 	threadID, forumSlug := -1, ""
-	transactionConnection, err := handler.connection.Begin()
-	if err != nil {
-		fmt.Println(err)
-	}
-	// Rollback is safe to call even if the tx is already closed, so if
-	// the tx commits successfully, this is a no-op
-	defer transactionConnection.Rollback()
 
+	var err error
 	if convertErr != nil {
-		err = transactionConnection.QueryRow(`SELECT id, forum FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
+		err = handler.connection.QueryRow(`SELECT id, forum FROM threads WHERE slug=$1`, threadSlugOrId).Scan(&threadID, &forumSlug)
 	} else {
-		err = transactionConnection.QueryRow(`SELECT id, forum FROM threads WHERE id=$1`, threadSlugOrIdConverted).Scan(&threadID, &forumSlug)
+		err = handler.connection.QueryRow(`SELECT id, forum FROM threads WHERE id=$1`, threadSlugOrIdConverted).Scan(&threadID, &forumSlug)
 	}
 	if err != nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -323,7 +317,7 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 	}
 
 
-	var posts []Post
+	posts := make([]Post, 0)
 	json.Unmarshal(ctx.PostBody(), &posts)
 	if len(posts) == 0 {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -332,27 +326,26 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-
-	if posts[0].Parent != 0 {
-		var pThread int
-		transactionConnection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
-
-		if pThread != threadID {
-			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-			ctx.Response.SetStatusCode(http.StatusConflict)
-			json.NewEncoder(ctx).Encode(ErrorMsg{
-				"Parent post was created in another thread!",
-			})
-			return
-		}
-	}
+	//
+	//if posts[0].Parent != 0 {
+	//	//var pThread int
+	//	//handler.connection.QueryRow(`SELECT thread FROM posts WHERE id = $1`,posts[0].Parent).Scan(&pThread)
+	//	//
+	//	//if pThread != threadID {
+	//	//	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	//	//	ctx.Response.SetStatusCode(http.StatusConflict)
+	//	//	json.NewEncoder(ctx).Encode(ErrorMsg{
+	//	//		"Parent post was created in another thread!",
+	//	//	})
+	//	//	return
+	//	//}
+	//}
 
 
 	timeOfCreation := strfmt.DateTime(time.Now())
 	resultQueryString := `INSERT INTO posts(parent, author, message, thread, forum, created) VALUES `
 	var queryArguments []interface{}
 	lastValidInsertIndex := len(posts) - 1
-	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
@@ -363,13 +356,12 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 
 		if index != lastValidInsertIndex {
 			resultQueryString += ", "
-		} else {
-			resultQueryString += " RETURNING id;"
 		}
 	}
+	resultQueryString += " RETURNING id;"
 
 	//start := time.Now()
-	res, QueryErr := transactionConnection.Query(resultQueryString, queryArguments...)
+	res, QueryErr := handler.connection.Query(resultQueryString, queryArguments...)
 	//fmt.Printf("Query time: %s\n", time.Since(start))
 	if res == nil || QueryErr != nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
@@ -381,10 +373,11 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 	}
 
 
-	for index, _ := range posts {
-		isNext := res.Next()
-		if isNext == false {
-			res.Close()
+	index := 0
+	for res.Next() {
+		err = res.Scan(&(posts[index].ID))
+
+		if err != nil {
 			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 			ctx.Response.SetStatusCode(http.StatusNotFound)
 			json.NewEncoder(ctx).Encode(ErrorMsg{
@@ -392,15 +385,57 @@ func (handler *postgresHandler) createPost (ctx *fasthttp.RequestCtx) {
 			})
 			return
 		}
-		err = res.Scan(&posts[index].ID)
+		index++
 	}
+
+	if dbErr, ok := res.Err().(pgx.PgError); ok {
+		if dbErr.Code == "77777" {
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
+				"Parent post does not exists!",
+			})
+			return
+		} else if dbErr.Code == "77778" {
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusConflict)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
+				"Parent was created in another thread!",
+			})
+			return
+		} else {
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusNotFound)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
+				"cant find something!",
+			})
+			return
+		}
+	}
+
+
+	//for index, _ := range posts {
+	//	res.Next()
+	//	err = res.Scan(&posts[index].ID)
+	//	if err != nil {
+	//		res.Close()
+	//		if pqErr, ok := err.(pgx.PgError); ok {
+	//			fmt.Println(pqErr)
+	//		}
+	//		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+	//		ctx.Response.SetStatusCode(http.StatusConflict)
+	//		json.NewEncoder(ctx).Encode(ErrorMsg{
+	//			"Parent was created in another thread!",
+	//		})
+	//		return
+	//	}
+	//}
 
 
 	res.Close()
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 	ctx.Response.SetStatusCode(http.StatusCreated)
 	json.NewEncoder(ctx).Encode(posts)
-	transactionConnection.Commit()
 	return
 }
 
@@ -653,7 +688,7 @@ func (handler *postgresHandler) getThreadPosts (ctx *fasthttp.RequestCtx) {
 		if sinceParam != "" {
 			since = fmt.Sprintf("AND path[1] %s (SELECT path[1] FROM posts WHERE id=%s)", compare, sinceParam)
 		}
-		query += fmt.Sprintf("path[1] IN (SELECT id FROM posts WHERE thread=%d AND parent=0 %s ORDER BY id %s LIMIT %s) ", threadID, since, sortOrder, limitParam)
+		query += fmt.Sprintf("path[1] IN (SELECT id FROM posts WHERE thread=%d AND parent IS NULL %s ORDER BY id %s LIMIT %s) ", threadID, since, sortOrder, limitParam)
 		if descParam {
 			query += "ORDER BY path[1] DESC, path, id"
 		} else {
@@ -863,7 +898,7 @@ func (handler *postgresHandler) changePostMessage (ctx *fasthttp.RequestCtx) {
 	if newPost.Author != "" {
 		setQuery += fmt.Sprintf(" author = '%s',", newPost.Author)
 	}
-	if newPost.Parent != 0 {
+	if newPost.Parent != nil {
 		thread := 0
 		handler.connection.QueryRow(fmt.Sprintf("SELECT thread FROM posts WHERE id=%d", newPost.Parent)).Scan(&thread)
 		if thread == newPost.Thread {

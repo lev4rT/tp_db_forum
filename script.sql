@@ -15,8 +15,8 @@ CREATE UNLOGGED TABLE forums (
                         title TEXT NOT NULL,  -- Название форума.
                         "user" CITEXT NOT NULL REFERENCES users(nickname) ,  -- Nickname пользователя, который отвечает за форум.
                         slug CITEXT NOT NULL UNIQUE PRIMARY KEY,  -- Человекопонятный URL. Уникальное поле.
-                        posts BIGINT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
-                        threads BIGINT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
+                        posts INT DEFAULT 0,  -- Общее кол-во сообщений в данном форуме.
+                        threads INT DEFAULT 0  -- Общее кол-во ветвей обсуждения в данном форуме.
 );
 
 DROP TABLE IF EXISTS threads CASCADE;
@@ -63,18 +63,22 @@ CREATE TRIGGER appendThreadsCounterForumTrigger AFTER INSERT ON "threads"
 
 DROP TABLE IF EXISTS posts CASCADE;
 CREATE UNLOGGED TABLE posts (
-                       id BIGSERIAL NOT NULL PRIMARY KEY,  -- Идентификатор данного сообщения.
-                       parent BIGINT DEFAULT 0,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
+                       id SERIAL PRIMARY KEY,  -- Идентификатор данного сообщения.
+                       parent INTEGER REFERENCES posts(id) DEFAULT NULL,  -- Идентификатор родительского сообщения (0 - корневое сообщение обсуждения).
                        author CITEXT NOT NULL REFERENCES users(nickname),  -- Автор, написавший данное сообщение.
                        message TEXT NOT NULL,  -- Собственно сообщение форума.
-                       isEdited BOOLEAN DEFAULT false,  -- Истина, если данное сообщение было изменено.
-                       forum CITEXT, -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
+                       isEdited BOOLEAN DEFAULT FALSE,  -- Истина, если данное сообщение было изменено.
+                       forum CITEXT REFERENCES forums(slug), -- NOT NULL REFERENCES forums(slug),  -- Идентификатор форума (slug) данного сообещния.
                        thread INTEGER REFERENCES threads(id),  -- Идентификатор ветви (id) обсуждения данного сообещния.
-                       created TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- Дата создания сообщения на форуме.
-                       path BIGINT[] DEFAULT ARRAY []::INTEGER[], -- Materialized Path. Используется для вложенных постов
+                       created TIMESTAMP WITH TIME ZONE,  -- Дата создания сообщения на форуме.
+                       path INTEGER[], -- Materialized Path. Используется для вложенных постов
 
                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
+
+DROP INDEX IF EXISTS postsThread;
+-- create index postsThread on posts (thread);
+
 DROP INDEX IF EXISTS postsThreadID;
 -- CREATE INDEX IF NOT EXISTS postsThreadID ON posts (thread, id);
 
@@ -100,14 +104,11 @@ CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
 $$
 DECLARE
     nicknameUser CITEXT;
-    fullnameUser TEXT;
-    aboutUser TEXT;
-    emailUser CITEXT;
 BEGIN
     UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
-    SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
+    SELECT nickname INTO nicknameUser FROM users WHERE nickname = NEW.author;
     INSERT INTO usersonforums(nickname, slug) VALUES (nicknameUser, NEW.forum) ON CONFLICT DO NOTHING;
-    RETURN NEW;
+    RETURN NULL;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -121,18 +122,23 @@ CREATE TRIGGER appendPostsCounterForumTrigger AFTER INSERT ON "posts"
 CREATE OR REPLACE FUNCTION setPathForPost() RETURNS TRIGGER AS
 $$
 DECLARE
-    nicknameUser CITEXT;
-    fullnameUser TEXT;
-    aboutUser TEXT;
-    emailUser CITEXT;
+    parents INTEGER [];
+    parentsThread INTEGER;
 BEGIN
-    IF NEW.parent = 0 THEN
-        NEW.path = ARRAY [NEW.id];
-    ELSE
-        SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
-        NEW.path = array_append(NEW.path, NEW.id);
-    END IF;
-    RETURN NEW;
+    if (new.parent is null) then
+        new.path := new.path || new.id;
+    else
+        select path, thread from posts where id = new.parent into parents, parentsThread;
+        if (coalesce(array_length(parents, 1), 0) = 0) then
+            raise exception 'parents post does not exists' USING ERRCODE = '77777';
+        end if;
+        if parentsThread != new.thread then
+            raise exception 'threads are different' USING ERRCODE = '77778';
+        end if;
+
+        new.path := new.path || parents || new.id;
+    end if;
+    return new;
 END;
 $$
 LANGUAGE 'plpgsql';
