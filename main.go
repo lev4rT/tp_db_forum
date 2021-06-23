@@ -365,15 +365,9 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	}
 
 	//start := time.Now()
-	res, _ := transactionConnection.Query(resultQueryString, queryArguments...)
+	res, QueryErr := transactionConnection.Query(resultQueryString, queryArguments...)
 	//fmt.Printf("Query time: %s\n", time.Since(start))
-
-	for index, _ := range posts {
-		res.Next()
-		err = res.Scan(&posts[index].ID)
-	}
-	if err != nil {
-		res.Close()
+	if res == nil || QueryErr != nil {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusNotFound)
 		json.NewEncoder(ctx).Encode(ErrorMsg{
@@ -381,6 +375,22 @@ func createPost (ctx *fasthttp.RequestCtx) {
 		})
 		return
 	}
+
+
+	for index, _ := range posts {
+		isNext := res.Next()
+		if isNext == false {
+			res.Close()
+			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
+			ctx.Response.SetStatusCode(http.StatusNotFound)
+			json.NewEncoder(ctx).Encode(ErrorMsg{
+				"cant find something!",
+			})
+			return
+		}
+		err = res.Scan(&posts[index].ID)
+	}
+
 
 	res.Close()
 	ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
