@@ -1,9 +1,9 @@
-FROM golang:1.15.2-buster AS build
+FROM golang:1.16 AS build
 
 # Копируем исходный код в Docker-контейнер
-ADD . /opt/build/golang/
-WORKDIR /opt/build/golang/
-RUN go build main.go
+ADD . /opt/app
+WORKDIR /opt/app
+RUN go build ./main.go
 
 
 FROM ubuntu:20.04 AS release
@@ -52,8 +52,12 @@ USER root
 # Объявлем порт сервера
 EXPOSE 5000
 
+WORKDIR /usr/workdir
+
+COPY . .
+
 # Собранный ранее сервер
-COPY --from=build /opt/build/golang/ .
+COPY --from=build /opt/app/main .
 
 #
 # Запускаем PostgreSQL и сервер
