@@ -24,8 +24,8 @@ func main() {
 		panic(err)
 	}
 
-	config.PreferSimpleProtocol = true
-	connPoolConfig := pgx.ConnPoolConfig { ConnConfig: config, MaxConnections: 50, AcquireTimeout: 0, AfterConnect: nil }
+	config.PreferSimpleProtocol = false
+	connPoolConfig := pgx.ConnPoolConfig { ConnConfig: config, MaxConnections: 100, AcquireTimeout: 0, AfterConnect: nil }
 
 	DB, err = pgx.NewConnPool(connPoolConfig)
 	if err != nil {
