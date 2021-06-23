@@ -293,10 +293,8 @@ type Post struct {
 }
 
 func createPost (ctx *fasthttp.RequestCtx) {
-	var posts []Post
 	threadSlugOrId := ctx.UserValue("slug_or_id").(string)
 	threadSlugOrIdConverted, convertErr := strconv.Atoi(threadSlugOrId)
-	json.Unmarshal(ctx.PostBody(), &posts)
 	threadID, forumSlug := -1, ""
 	transactionConnection, err := DB.Begin()
 	if err != nil {
@@ -319,6 +317,10 @@ func createPost (ctx *fasthttp.RequestCtx) {
 		})
 		return
 	}
+
+
+	var posts []Post
+	json.Unmarshal(ctx.PostBody(), &posts)
 	if len(posts) == 0 {
 		ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
 		ctx.Response.SetStatusCode(http.StatusCreated)
@@ -347,16 +349,6 @@ func createPost (ctx *fasthttp.RequestCtx) {
 	var queryArguments []interface{}
 	// TODO: Validate PARENTS POST SOMEHOW!
 	for index, _ := range posts {
-		err = transactionConnection.QueryRow(`SELECT nickname FROM users WHERE nickname = $1`, posts[index].Author).Scan(&posts[index].Author)
-		if err != nil {
-			ctx.Response.Header.SetCanonical(strContentType, strApplicationJSON)
-			ctx.Response.SetStatusCode(http.StatusNotFound)
-			json.NewEncoder(ctx).Encode(ErrorMsg{
-				"User not found!",
-			})
-			return
-		}
-
 		posts[index].Forum = forumSlug
 		posts[index].Thread = threadID
 		posts[index].Created = timeOfCreation
