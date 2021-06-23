@@ -34,7 +34,7 @@ DROP INDEX IF EXISTS threadsForum;
 CREATE INDEX threadsForum ON threads(forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE UNIQUE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;
+CREATE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;;
 
 
 ------------------------------------------------------------------------
@@ -49,7 +49,7 @@ nicknameUser CITEXT;
 BEGIN
 UPDATE forums SET threads = threads + 1 WHERE slug = NEW.forum;
 SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
-INSERT INTO usersonforums(nickname, slug) VALUES (nicknameUser, NEW.forum) ON CONFLICT DO NOTHING;
+INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
 RETURN NEW;
 END;
 $$
@@ -106,7 +106,7 @@ nicknameUser CITEXT;
 BEGIN
 UPDATE forums SET posts = posts + 1 WHERE slug = NEW.forum;
 SELECT nickname, fullname, about, email INTO nicknameUser, fullnameUser, aboutUser, emailUser FROM users WHERE nickname = NEW.author;
-INSERT INTO usersonforums(nickname, slug) VALUES (nicknameUser, NEW.forum) ON CONFLICT DO NOTHING;
+INSERT INTO usersonforums(nickname, fullname, about, email, slug) VALUES (nicknameUser, fullnameUser, aboutUser, emailUser, NEW.forum) ON CONFLICT DO NOTHING;
 RETURN NEW;
 END;
 $$
@@ -207,15 +207,16 @@ CREATE TRIGGER changeVoteForThreadTrigger AFTER UPDATE ON "votes"
 
 DROP TABLE IF EXISTS usersOnForums CASCADE;
 CREATE UNLOGGED TABLE usersOnForums (
-    id SERIAL NOT NULL PRIMARY KEY,
     nickname CITEXT NOT NULL REFERENCES users(nickname),  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
+    fullname TEXT NOT NULL,  -- Полное имя пользователя.
+    about TEXT,  -- Описание пользователя.
+    email CITEXT NOT NULL,  -- Почтовый адрес пользователя (уникальное поле).
     slug CITEXT NOT NULL REFERENCES forums(slug),  -- Человекопонятный URL. Уникальное поле.
-
-    CONSTRAINT uniqueUserOnForum UNIQUE (nickname, slug)
+    UNIQUE (nickname, slug)
 );
 
 DROP INDEX IF EXISTS usersOnForumsNicknameSlug;
-CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(nickname, slug);
+CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(slug, nickname);
 
 ANALYZE users;
 ANALYZE forums;
