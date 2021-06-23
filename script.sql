@@ -1,5 +1,17 @@
 CREATE EXTENSION IF NOT EXISTS citext;
 
+DO
+$$BEGIN
+   EXECUTE (
+   SELECT 'DROP INDEX ' || string_agg(indexrelid::regclass::text, ', ')
+   FROM   pg_index  i
+   LEFT   JOIN pg_depend d ON d.objid = i.indexrelid
+                          AND d.deptype = 'i'
+   WHERE  i.indrelid = 'posts'::regclass  -- possibly schema-qualified
+   AND    d.objid IS NULL                                -- no internal dependency
+   );
+END$$;
+
 DROP TABLE IF EXISTS users CASCADE;
 CREATE UNLOGGED TABLE users (
                        nickname CITEXT UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
@@ -75,11 +87,17 @@ CREATE UNLOGGED TABLE posts (
 
 --                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
-DROP INDEX IF EXISTS postsPath1DescID;
-CREATE INDEX IF NOT EXISTS postsPath1DescID ON posts ((path[1]), id);
---
+DROP INDEX IF EXISTS postsIDPath1;
+CREATE INDEX IF NOT EXISTS postsIDPath1 ON posts (id, (path[1]));
+
+DROP INDEX IF EXISTS postsThreadIDPath1Parent;
+CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
+
 DROP INDEX IF EXISTS postsThreadPathID;
 CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
+
+DROP INDEX IF EXISTS postsPath1;
+CREATE INDEX IF NOT EXISTS postsPath1 ON posts ((path[1]));
 
 
 ------------------------------------------------------------------------
