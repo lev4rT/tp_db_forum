@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS citext;
-
 DO
 $$BEGIN
    EXECUTE (
@@ -12,6 +10,8 @@ $$BEGIN
    );
 END$$;
 
+CREATE EXTENSION IF NOT EXISTS citext;
+
 DROP TABLE IF EXISTS users CASCADE;
 CREATE UNLOGGED TABLE users (
                        nickname CITEXT UNIQUE PRIMARY KEY,  -- Имя пользователя (уникальное поле). Данное поле допускает только латиницу, цифры и знак подчеркивания. Сравнение имени регистронезависимо.
@@ -20,7 +20,7 @@ CREATE UNLOGGED TABLE users (
                        email CITEXT NOT NULL UNIQUE -- Почтовый адрес пользователя (уникальное поле).
 );
 DROP INDEX IF EXISTS usersEmail;
-CREATE INDEX usersEmail ON users(email);
+CREATE INDEX usersEmail ON users USING HASH (email);
 
 DROP TABLE IF EXISTS forums CASCADE;
 CREATE UNLOGGED TABLE forums (
@@ -43,10 +43,10 @@ CREATE UNLOGGED TABLE threads (
                          created TIMESTAMP WITH TIME ZONE DEFAULT NOW()  -- Дата создания ветки на форуме.
 );
 DROP INDEX IF EXISTS threadsForum;
-CREATE INDEX threadsForum ON threads(forum);
+CREATE INDEX threadsForum ON threads USING HASH (forum);
 
 DROP INDEX IF EXISTS threadsSlug;
-CREATE INDEX threadsSlug ON threads(slug) WHERE slug IS NOT NULL;;
+CREATE INDEX threadsSlug ON threads USING HASH (slug) WHERE slug IS NOT NULL;;
 
 
 ------------------------------------------------------------------------
@@ -87,17 +87,18 @@ CREATE UNLOGGED TABLE posts (
 
 --                        CONSTRAINT unique_post UNIQUE (author, message, forum, thread)
 );
+DROP INDEX IF EXISTS postsPath1;
+CREATE INDEX IF NOT EXISTS postsPath1 ON posts ((path[1]));
+
 DROP INDEX IF EXISTS postsIDPath1;
 CREATE INDEX IF NOT EXISTS postsIDPath1 ON posts (id, (path[1]));
-
-DROP INDEX IF EXISTS postsThreadIDPath1Parent;
-CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
 
 DROP INDEX IF EXISTS postsThreadPathID;
 CREATE INDEX IF NOT EXISTS postsThreadPathID ON posts (thread, path, id);
 
-DROP INDEX IF EXISTS postsPath1;
-CREATE INDEX IF NOT EXISTS postsPath1 ON posts ((path[1]));
+DROP INDEX IF EXISTS postsThreadIDPath1Parent;
+CREATE INDEX IF NOT EXISTS postsThreadIDPath1Parent ON posts (thread, id, (path[1]), parent);
+
 
 
 ------------------------------------------------------------------------
@@ -105,7 +106,7 @@ CREATE INDEX IF NOT EXISTS postsPath1 ON posts ((path[1]));
 CREATE OR REPLACE FUNCTION appendPostsCounterForum() RETURNS TRIGGER AS
 $$
 DECLARE
-nicknameUser CITEXT;
+    nicknameUser CITEXT;
     fullnameUser TEXT;
     aboutUser TEXT;
     emailUser CITEXT;
@@ -134,11 +135,11 @@ nicknameUser CITEXT;
 BEGIN
     IF NEW.parent = 0 THEN
         NEW.path = ARRAY [NEW.id];
-ELSE
-SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
-NEW.path = array_append(NEW.path, NEW.id);
-END IF;
-RETURN NEW;
+    ELSE
+        SELECT path INTO NEW.PATH FROM posts WHERE id = NEW.parent;
+        NEW.path = array_append(NEW.path, NEW.id);
+    END IF;
+    RETURN NEW;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -154,10 +155,10 @@ $$
 BEGIN
     IF NEW.message = '' OR NEW.message = OLD.message THEN
         RETURN NEW;
-ELSE
+    ELSE
         NEW.isedited=true;
-RETURN NEW;
-END IF;
+        RETURN NEW;
+    END IF;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -178,8 +179,8 @@ CREATE UNIQUE INDEX votesNicknameThreadID ON votes(nickname, threadID);
 CREATE OR REPLACE FUNCTION addVoteForThread() RETURNS TRIGGER AS
 $$
 BEGIN
-UPDATE threads SET votes = votes + NEW."voice" WHERE id = NEW."threadid";
-RETURN NEW;
+    UPDATE threads SET votes = votes + NEW."voice" WHERE id = NEW."threadid";
+    RETURN NEW;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -195,10 +196,10 @@ $$
 BEGIN
     IF OLD.voice = NEW.voice THEN
         RETURN OLD;
-ELSE
-UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
-RETURN NEW;
-END IF;
+    ELSE
+        UPDATE threads SET votes = votes + 2 * NEW."voice" WHERE id = NEW."threadid";
+        RETURN NEW;
+    END IF;
 END;
 $$
 LANGUAGE 'plpgsql';
@@ -217,12 +218,11 @@ CREATE UNLOGGED TABLE usersOnForums (
     fullname TEXT NOT NULL,  -- Полное имя пользователя.
     about TEXT,  -- Описание пользователя.
     email CITEXT NOT NULL,  -- Почтовый адрес пользователя (уникальное поле).
-    slug CITEXT NOT NULL REFERENCES forums(slug),  -- Человекопонятный URL. Уникальное поле.
-    UNIQUE (nickname, slug)
+    slug CITEXT NOT NULL REFERENCES forums(slug)  -- Человекопонятный URL. Уникальное поле.
 );
 
 DROP INDEX IF EXISTS usersOnForumsNicknameSlug;
-CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsNicknameSlug ON usersOnForums(slug, nickname);
+CREATE UNIQUE INDEX IF NOT EXISTS usersOnForumsSlugNickname ON usersOnForums(slug, nickname);
 
 ANALYZE users;
 ANALYZE forums;
